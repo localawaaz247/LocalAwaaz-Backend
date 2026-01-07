@@ -2,9 +2,7 @@ const express = require('express');
 const connectDB = require('../database/connectDB');
 require('dotenv').config()
 const app = express();
-app.use("/", (req, res) => {
-    res.send("hello");
-})
+
 
 
 const startServer = async () => {
