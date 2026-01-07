@@ -3,7 +3,7 @@ const userSchema = new mongoose.Schema({
     mobile: {
         type: String,
         unique: true,
-        sparse: true // allows null values
+        sparse: true    // allows null values
     },
     otp: {
         type: String

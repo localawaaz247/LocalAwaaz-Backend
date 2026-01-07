@@ -2,7 +2,7 @@ const express = require('express');
 const connectDB = require('../database/connectDB');
 require('dotenv').config()
 const app = express();
-
+app.use(express.json());
 
 
 const startServer = async () => {
