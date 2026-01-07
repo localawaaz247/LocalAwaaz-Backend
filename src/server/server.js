@@ -1,6 +1,6 @@
 const express = require('express');
+const connectDB = require('../database/connectDB');
 require('dotenv').config()
-const connectDB = require('./database/connectDB');
 const app = express();
 app.use("/", (req, res) => {
     res.send("hello");
