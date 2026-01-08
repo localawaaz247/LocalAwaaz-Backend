@@ -5,11 +5,14 @@ const userSchema = new mongoose.Schema({
         unique: true,
         sparse: true    // allows null values
     },
-    otp: {
-        type: String
+    userId: {
+        type: String,
+        unique: true,
+        required: true
     },
     email: {
         type: String,
+        verified: Boolean,
         unique: true
     },
     password: {

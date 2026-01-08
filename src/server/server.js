@@ -1,9 +1,11 @@
 const express = require('express');
 const connectDB = require('../database/connectDB');
+const userRouter = require('../routes/userRouter');
 require('dotenv').config()
 const app = express();
 app.use(express.json());
 
+app.use("/", userRouter);
 
 const startServer = async () => {
     try {
