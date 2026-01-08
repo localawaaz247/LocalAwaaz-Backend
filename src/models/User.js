@@ -25,13 +25,7 @@ const userSchema = new mongoose.Schema({
         trim: true,
         sparse: true,
         unique: true,
-        lowercase: true,
-        validate: {
-            validator: function (value) {
-                return value === null || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-            },
-            message: "Please enter a valid email id"
-        }
+        lowercase: true
     },
     mobile: {
         type: Number,
@@ -46,7 +40,7 @@ const userSchema = new mongoose.Schema({
     profilePic: {
         type: String
     },
-    isEmailVerified: {
+    isVerified: {
         type: Boolean,
         default: false
     },

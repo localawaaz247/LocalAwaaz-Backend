@@ -17,9 +17,9 @@ userRouter.post('/user/signup', async (req, res) => {
         await checkUniqueness(req);
         const hashedPassword = await bcrypt.hash(password, 10);
         const user = await User.create({ userName, password: hashedPassword, email, name, profilePic, gender, mobile, country, state, district, pinCode });
-        const otpRecord = await OtpModel.findOne({ email, isEmailVerified: true });
+        const otpRecord = await OtpModel.findOne({ email, isVerified: true });
         if (otpRecord) {
-            user.isEmailVerified = true;
+            user.isVerified = true;
             await user.save();
         }
         const token = jwt.sign({ userName: user.userName }, process.env.JWT_PRIVATE_KEY, {
@@ -38,7 +38,7 @@ userRouter.post('/user/signup', async (req, res) => {
 
 userRouter.post('/user/send-otp', async (req, res) => {
     try {
-        const { email } = req.body;
+        const { email, userName } = req.body;
         if (!validate.isEmail(email)) {
             return res.status(400).json({ message: "Enter Valid email id" });
         }
@@ -46,15 +46,13 @@ userRouter.post('/user/send-otp', async (req, res) => {
         const hashedOtp = await bcrypt.hash(generatedOtp, 10);
         await sendMail({ email, generatedOtp });
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
-        const record = await OtpModel.findOne({ email });
-        if (record) {
-            record.otp = hashedOtp;
-            record.expiresAt = expiresAt;
-            await record.save();
+        if (userName) {
+            await OtpModel.create({ email, otp: hashedOtp, userName, expiresAt });
         }
         else {
             await OtpModel.create({ email, otp: hashedOtp, expiresAt });
         }
+
         res.status(200).json({ success: true, message: "If email exists, OTP has been sent" });
     } catch (err) {
         res.status(400).json({ success: false, message: "Enter valid email id" });
@@ -64,12 +62,20 @@ userRouter.post('/user/send-otp', async (req, res) => {
 
 userRouter.post('/user/verify-otp', async (req, res) => {
     try {
-        const { email, otp } = req.body;
+        const { email, otp, userName } = req.body;
 
         if (!email || !otp) return res.status(400).json({ message: 'Email and OTP required' });
 
         await verifyOtp(email, otp);
-
+        if (userName) {
+            const userRecord = await OtpModel.findOne({ userName });
+            if (userRecord) {
+                const user = await User.findOne({ userName });
+                user.isVerified = true
+                user.email = email;
+                await user.save();
+            }
+        }
         res.status(200).json({ success: true, message: 'OTP verified successfully' });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });
@@ -77,7 +83,7 @@ userRouter.post('/user/verify-otp', async (req, res) => {
 })
 userRouter.post('/user/resend-otp', async (req, res) => {
     try {
-        const { email } = req.body;
+        const { email, userName } = req.body;
         if (!validate.isEmail(email)) {
             return res.status(400).json({ message: "Enter Valid email id" });
         }
@@ -89,6 +95,9 @@ userRouter.post('/user/resend-otp', async (req, res) => {
         }
         await sendMail({ email, generatedOtp });
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+        if (userName) {
+            record.userName = userName;
+        }
         record.otp = hashedOtp;
         record.attempts = 0;
         record.expiresAt = expiresAt;

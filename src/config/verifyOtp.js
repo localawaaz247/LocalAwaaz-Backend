@@ -18,7 +18,7 @@ const verifyOtp = async (email, enteredOtp) => {
         await record.save();
         throw new Error("Wrong OTP entered");
     }
-    record.isEmailVerified = true;
+    record.isVerified = true;
     record.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     await record.save();
     return true;
