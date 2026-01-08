@@ -10,13 +10,13 @@ const transporter = nodemailer.createTransport({
     }
 });
 
-async function sendMail({ email, otp }) {
+async function sendMail({ email, generatedOtp }) {
     try {
         const info = await transporter.sendMail({
             from: process.env.EMAIL,
             to: email,
             subject: "Email Verification OTP",
-            html: otpEmailTemplate(otp)
+            html: otpEmailTemplate(generatedOtp)
         });
 
         console.log('Email sent:', info.response);

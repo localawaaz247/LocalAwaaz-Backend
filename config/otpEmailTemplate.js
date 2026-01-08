@@ -109,7 +109,7 @@ const otpEmailTemplate = (otp) => {
           <div class="otp-box">${otp}</div>
 
           <p class="note">
-            This OTP is valid for <b>5 minutes</b>.<br />
+            This OTP is valid for <b>10 minutes</b>.<br />
             Do not share this code with anyone. LocalAwaz will never ask for your OTP.
           </p>
         </div>
