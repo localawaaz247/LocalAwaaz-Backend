@@ -1,20 +1,20 @@
 const validate = require('validator');
 
 const validateSignUpData = (req) => {
-    const { userId, password, email, name, profilePic, gender, mobile, country, state, district, pinCode } = req.body;
+    const { userName, password, email, name, profilePic, gender, mobile, country, state, district, pinCode } = req.body;
     const allowedGender = ['male', 'female', 'other'];
-    const userIdRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d_@]+$/;
+    const userNameRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d_@]+$/;
     if (!name || name.trim().length < 3) {
         throw new Error('Name must be at least 3 characters long');
     }
-    if (!userId) {
-        throw new Error("userId is required");
+    if (!userName) {
+        throw new Error("userName is required");
     }
-    if (userId.trim().length < 4) {
-        throw new Error('UserId must be at least 4 characters long');
+    if (userName.trim().length < 4) {
+        throw new Error('userName must be at least 4 characters long');
     }
-    if (!userIdRegex.test(userId)) {
-        throw new Error('UserId must contain at least 1 uppercase, 1 lowercase, 1 number and only _ or @ are allowed');
+    if (!userNameRegex.test(userName)) {
+        throw new Error('userName must contain at least 1 uppercase, 1 lowercase, 1 number and only _ or @ are allowed');
     }
     if (!password) {
         throw new Error('Password is required');

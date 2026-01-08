@@ -7,24 +7,22 @@ const OtpModel = require('../models/Otp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
+const checkUniqueness = require('../../utils/checkUniqueness');
 const userRouter = express.Router();
 
 userRouter.post('/user/signup', async (req, res) => {
     try {
-        const { userId, password, name, profilePic, email, gender, mobile, country, state, district, pinCode } = req.body;
+        const { userName, password, name, profilePic, email, gender, mobile, country, state, district, pinCode } = req.body;
         validateSignUpData(req);
-        const record = await User.findOne({ userId });
-        if (record) {
-            return res.status(400).json({ success: false, message: "userId should be unique; userId: 1 uppercase, 1 lowercase, 1 number; only _ or @ allowed." })
-        }
+        await checkUniqueness(req);
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ userId, password: hashedPassword, name, profilePic, gender, mobile, country, state, district, pinCode });
+        const user = await User.create({ userName, password: hashedPassword, email, name, profilePic, gender, mobile, country, state, district, pinCode });
         const otpRecord = await OtpModel.findOne({ email, isEmailVerified: true });
         if (otpRecord) {
             user.isEmailVerified = true;
             await user.save();
         }
-        const token = jwt.sign({ userId: user.userId }, process.env.JWT_PRIVATE_KEY, {
+        const token = jwt.sign({ userName: user.userName }, process.env.JWT_PRIVATE_KEY, {
             expiresIn: '7d'
         });
         res.cookie("token", token, {

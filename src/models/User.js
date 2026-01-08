@@ -3,27 +3,45 @@ const userSchema = new mongoose.Schema({
     name: {
         type: String
     },
-    userId: {
+    userName: {
         type: String,
-        unique: true,
-        required: true
+        required: [true, "userName is required"],
+        trim: true,
+        unique: true
     },
     password: {
         type: String
     },
     gender: {
         type: String,
-        enum: ["male", "female", "other"]
+        enum: {
+            values: ["male", "female", "other"],
+            message: "Gender must be male, female, or other"
+        }
     },
     email: {
         type: String,
-        unique: true
+        default: null,
+        trim: true,
+        sparse: true,
+        unique: true,
+        lowercase: true,
+        validate: {
+            validator: function (value) {
+                return value === null || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+            },
+            message: "Please enter a valid email id"
+        }
     },
     mobile: {
         type: Number,
-        unique: true,
         sparse: true,    // allows null values
-        default: null
+        default: null,
+        unique: true,
+        validate: {
+            validator: v => v === null || v.toString().length === 10,
+            message: "Mobile number must be 10 digits"
+        }
     },
     profilePic: {
         type: String
@@ -34,19 +52,23 @@ const userSchema = new mongoose.Schema({
     },
     country: {
         type: String,
-        required: true
+        required: [true, 'Country is Required']
     },
     state: {
         type: String,
-        required: true
+        required: [true, "State is Required"]
     },
     district: {
         type: String,
-        required: true
+        required: [true, "District is Required"]
     },
     pinCode: {
         type: Number,
-        required: true
+        required: [true, "pinCode is Required"],
+        validate: {
+            validator: v => v.toString().length === 6,
+            message: "PinCode must be of 6 digits"
+        }
     },
     googleId: {
         type: String,
