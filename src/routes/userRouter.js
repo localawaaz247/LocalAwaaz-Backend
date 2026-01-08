@@ -1,19 +1,40 @@
 const express = require('express');
 const { sendMail } = require('../config/sendOtp')
 const validateSignUpData = require('../../utils/validateSignUpData');
-const verifyOtp = require('../config/verifyOtpfn&storage');
+const verifyOtp = require('../config/verifyOtp');
 const validate = require('validator');
 const OtpModel = require('../models/Otp');
-const bcrypt = require('bcrypt')
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const User = require('../models/User');
 const userRouter = express.Router();
 
 userRouter.post('/user/signup', async (req, res) => {
     try {
+        const { userId, password, name, profilePic, email, gender, mobile, country, state, district, pinCode } = req.body;
         validateSignUpData(req);
-        res.status(200).json({ success: true, message: "Signup Successfull" });
-
+        const record = await User.findOne({ userId });
+        if (record) {
+            return res.status(400).json({ success: false, message: "userId should be unique; userId: 1 uppercase, 1 lowercase, 1 number; only _ or @ allowed." })
+        }
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const user = await User.create({ userId, password: hashedPassword, name, profilePic, gender, mobile, country, state, district, pinCode });
+        const otpRecord = await OtpModel.findOne({ email, isEmailVerified: true });
+        if (otpRecord) {
+            user.isEmailVerified = true;
+            await user.save();
+        }
+        const token = jwt.sign({ userId: user.userId }, process.env.JWT_PRIVATE_KEY, {
+            expiresIn: '7d'
+        });
+        res.cookie("token", token, {
+            httpOnly: true,
+            sameSite: 'strict',
+            secure: true
+        });
+        res.status(200).json({ success: true, message: "SignUp Successfull" });
     } catch (err) {
-        res.status(400).json({ success: false, message: "Denied Signup Request" });
+        res.status(400).json({ success: false, message: err.message });
     }
 })
 
@@ -50,7 +71,7 @@ userRouter.post('/user/verify-otp', async (req, res) => {
         if (!email || !otp) return res.status(400).json({ message: 'Email and OTP required' });
 
         await verifyOtp(email, otp);
-        
+
         res.status(200).json({ success: true, message: 'OTP verified successfully' });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });

@@ -12,12 +12,15 @@ const verifyOtp = async (email, enteredOtp) => {
     if (attempts >= 5) {
         throw new Error("Maximum attempts reached! Try again after some time");
     }
-    if (!bcrypt.compare(record.otp, enteredOtp)) {
+    if (!bcrypt.compare(otp, enteredOtp)) {
         record.attempts += 1;
         await record.save();
         throw new Error("Wrong OTP entered");
     }
-    await OtpModel.deleteOne({ email });
+
+    record.isEmailVerified = true;
+    record.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    await record.save();
     return true;
 }
 

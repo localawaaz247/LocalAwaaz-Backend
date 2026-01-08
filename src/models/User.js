@@ -1,46 +1,57 @@
 const mongoose = require('mongoose');
 const userSchema = new mongoose.Schema({
-    mobile: {
-        type: String,
-        unique: true,
-        sparse: true    // allows null values
+    name: {
+        type: String
     },
     userId: {
         type: String,
         unique: true,
         required: true
     },
-    email: {
-        type: String,
-        verified: Boolean,
-        unique: true
-    },
     password: {
-        type: String
-    },
-    googleId: {
-        type: String,
-        unique: true,
-        sparse: true
-    },
-    name: {
-        type: String
-    },
-    profilePic: {
         type: String
     },
     gender: {
         type: String,
         enum: ["male", "female", "other"]
     },
-    country: {
+    email: {
+        type: String,
+        unique: true
+    },
+    mobile: {
+        type: Number,
+        unique: true,
+        sparse: true,    // allows null values
+        default: null
+    },
+    profilePic: {
         type: String
+    },
+    isEmailVerified: {
+        type: Boolean,
+        default: false
+    },
+    country: {
+        type: String,
+        required: true
     },
     state: {
-        type: String
+        type: String,
+        required: true
+    },
+    district: {
+        type: String,
+        required: true
     },
     pinCode: {
-        type: Number
+        type: Number,
+        required: true
+    },
+    googleId: {
+        type: String,
+        unique: true,
+        sparse: true
     }
 },
     {
