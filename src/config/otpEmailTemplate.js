@@ -5,7 +5,7 @@ const otpEmailTemplate = (otp) => {
     <head>
       <meta charset="UTF-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>LocalAwaz OTP</title>
+      <title>LocalAwaaz OTP</title>
       <style>
         body, html {
           margin: 0;
@@ -99,7 +99,7 @@ const otpEmailTemplate = (otp) => {
     <body>
       <div class="container">
         <div class="header">
-          <div class="logo">LocalAwaz</div>
+          <div class="logo">LocalAwaaz</div>
           OTP Verification
         </div>
 
@@ -110,12 +110,12 @@ const otpEmailTemplate = (otp) => {
 
           <p class="note">
             This OTP is valid for <b>10 minutes</b>.<br />
-            Do not share this code with anyone. LocalAwaz will never ask for your OTP.
+            Do not share this code with anyone. LocalAwaaz will never ask for your OTP.
           </p>
         </div>
 
         <div class="footer">
-          © ${new Date().getFullYear()} LocalAwaz. All rights reserved.
+          © ${new Date().getFullYear()} LocalAwaaz. All rights reserved.
         </div>
       </div>
     </body>
