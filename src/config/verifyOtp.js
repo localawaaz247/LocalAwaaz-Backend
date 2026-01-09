@@ -20,7 +20,6 @@ const verifyOtp = async (email, enteredOtp) => {
     }
     record.isVerified = true;
     record.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    record.otp = null;
     await record.save();
     return true;
 }
