@@ -1,43 +1,14 @@
 const express = require('express');
 const { sendMail } = require('../config/sendOtp');
-const validateSignUpData = require('../utils/validateSignUpData');
 const verifyOtp = require('../config/verifyOtp');
 const validate = require('validator');
 const OtpModel = require('../models/Otp');
-const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
-const checkUniqueness = require('../utils/checkUniqueness');
-const userRouter = express.Router();
+const otpRouter = express.Router();
 
-userRouter.post('/user/signup', async (req, res) => {
-    try {
-        const { userName, password, name, profilePic, email, gender, mobile, country, state, district, pinCode } = req.body;
-        validateSignUpData(req);
-        await checkUniqueness(req);
-        const role = 'user'
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ userName, password: hashedPassword, email, role, name, profilePic, gender, mobile, country, state, district, pinCode });
-        const otpRecord = await OtpModel.findOne({ email, isVerified: true });
-        if (otpRecord) {
-            user.isVerified = true;
-            await user.save();
-        }
-        const token = jwt.sign({ userName: user.userName, role: user.role }, process.env.JWT_PRIVATE_KEY, {
-            expiresIn: '7d'
-        });
-        res.cookie("token", token, {
-            httpOnly: true,
-            sameSite: 'strict',
-            secure: true
-        });
-        res.status(200).json({ success: true, message: "Signup Successful" });
-    } catch (err) {
-        res.status(400).json({ success: false, message: err.message });
-    }
-})
 
-userRouter.post('/user/send-otp', async (req, res) => {
+otpRouter.post('/auth/otp/send', async (req, res) => {
     try {
         const { email, userName } = req.body;
         if (!email || !validate.isEmail(email)) {
@@ -61,8 +32,7 @@ userRouter.post('/user/send-otp', async (req, res) => {
     }
 })
 
-
-userRouter.post('/user/verify-otp', async (req, res) => {
+otpRouter.post('/auth/otp/verify', async (req, res) => {
     try {
         const { email, otp, userName } = req.body;
 
@@ -83,7 +53,8 @@ userRouter.post('/user/verify-otp', async (req, res) => {
         res.status(400).json({ success: false, message: err.message });
     }
 })
-userRouter.post('/user/resend-otp', async (req, res) => {
+
+otpRouter.post('/auth/otp/resend', async (req, res) => {
     try {
         const { email, userName } = req.body;
         if (!validate.isEmail(email)) {
@@ -104,10 +75,11 @@ userRouter.post('/user/resend-otp', async (req, res) => {
         record.attempts = 0;
         record.expiresAt = expiresAt;
         await record.save();
-        res.status(200).json({ success: true, message: "If email exists, OTP has been sent" });
+        res.status(200).json({ success: true, message: "OTP sent on email id" });
 
     } catch (err) {
         res.status(400).json({ success: false, message: "Enter valid email id" });
     }
 })
-module.exports = userRouter
+
+module.exports = otpRouter

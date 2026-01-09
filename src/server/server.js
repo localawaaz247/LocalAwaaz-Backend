@@ -1,11 +1,13 @@
 const express = require('express');
 const connectDB = require('../database/connectDB');
-const userRouter = require('../routes/userRouter');
+const authRouter = require('../routes/authRouter');
+const otpRouter = require('../routes/otpRouter');
 require('dotenv').config()
 const app = express();
 app.use(express.json());
 
-app.use("/", userRouter);
+app.use("/", authRouter);
+app.use("/", otpRouter);
 
 const startServer = async () => {
     try {
