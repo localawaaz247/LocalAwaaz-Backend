@@ -1,125 +1,127 @@
 const otpEmailTemplate = (otp) => {
   return `
-  <!DOCTYPE html>
-  <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>LocalAwaaz OTP</title>
-      <style>
-        body, html {
-          margin: 0;
-          padding: 0;
-          font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-          background: linear-gradient(135deg, #047481, #116466);
-          color: #333333;
-        }
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Verify your identity in - LocalAwaaz</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #ffffff;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+        color: #24292f;
+      }
 
-        .container {
-          max-width: 600px;
-          margin: 40px auto;
-          background: #ffffff;
-          border-radius: 16px;
-          overflow: hidden;
-          box-shadow: 0 16px 40px rgba(0, 0, 0, 0.15);
-          border: 1px solid #e0e0e0;
-        }
+      .wrapper {
+        width: 100%;
+        padding: 24px 0;
+      }
 
-        .header {
-          background: linear-gradient(90deg, #047481, #116466);
-          color: #ffffff;
-          text-align: center;
-          padding: 30px 20px;
-          font-size: 28px;
-          font-weight: 700;
-          letter-spacing: 1px;
-        }
+      .container {
+        max-width: 480px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
 
-        .logo {
-          font-size: 36px;
-          font-weight: bold;
-          letter-spacing: 2px;
-          color: #ffffff;
-          margin-bottom: 8px;
-        }
+      .logo {
+        text-align: center;
+        margin-bottom: 24px;
+      }
 
-        .content {
-          padding: 40px 30px;
-          text-align: center;
-        }
+      .logo img {
+        width: 32px;
+        height: 32px;
+      }
 
-        .content p {
-          font-size: 16px;
-          line-height: 1.6;
-          color: #555555;
-          margin-bottom: 30px;
-        }
+      h1 {
+        font-size: 24px;
+        font-weight: 300;
+        text-align: center;
+        margin: 0 0 24px 0;
+      }
 
-        .otp-box {
-          display: inline-block;
-          background-color: #e0f7fa;
-          padding: 20px 40px;
-          border-radius: 12px;
-          font-size: 36px;
-          font-weight: 700;
-          letter-spacing: 12px;
-          color: #047481;
-          box-shadow: 0 4px 20px rgba(4, 116, 129, 0.3);
-          margin-bottom: 25px;
-        }
+      h1 strong {
+        font-weight: 600;
+      }
 
-        .note {
-          font-size: 14px;
-          color: #777777;
-          line-height: 1.5;
-          margin-top: 20px;
-        }
+      .box {
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        padding: 24px;
+        font-size: 14px;
+        line-height: 1.5;
+      }
 
-        .footer {
-          background-color: #f0f4f7;
-          padding: 20px;
-          text-align: center;
-          font-size: 13px;
-          color: #999999;
-        }
+      .otp {
+        font-size: 32px;
+        font-weight: 600;
+        letter-spacing: 4px;
+        text-align: center;
+        margin: 16px 0;
+      }
 
-        @media only screen and (max-width: 600px) {
-          .container {
-            margin: 20px;
-          }
-          .otp-box {
-            font-size: 28px;
-            padding: 15px 30px;
-            letter-spacing: 8px;
-          }
-        }
-      </style>
-    </head>
+      .muted {
+        color: #57606a;
+      }
 
-    <body>
+      .bold {
+        font-weight: 600;
+      }
+
+      .footer {
+        margin-top: 24px;
+        font-size: 12px;
+        color: #57606a;
+        text-align: center;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="wrapper">
       <div class="container">
-        <div class="header">
-          <div class="logo">LocalAwaaz</div>
-          OTP Verification
-        </div>
 
-        <div class="content">
-          <p>We received a request to verify your account. Use the OTP below to continue.</p>
+       <!-- <div class="logo"> -->
+          <!-- Replace src with your hosted logo if needed -->
+        <!--  <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="Logo" /> -->
+        <!-- </div> -->
 
-          <div class="otp-box">${otp}</div>
+        <h1>
+          Please verify your identity in 
+          <strong>LocalAwaaz</strong>
+        </h1>
 
-          <p class="note">
-            This OTP is valid for <b>10 minutes</b>.<br />
-            Do not share this code with anyone. LocalAwaaz will never ask for your OTP.
+        <div class="box">
+          <p>Here is your LocalAwaaz authentication code:</p>
+
+          <div class="otp">${otp}</div>
+
+          <p class="muted">
+            This code is valid for <strong>10 minutes</strong> and can only be used once.
           </p>
+
+          <p class="bold">
+            Please don't share this code with anyone:
+            <span class="muted">
+              LocalAwaaz will never ask for it on the phone or via email.
+            </span>
+          </p>
+
+          <p>Thanks,<br />The LocalAwaaz Team</p>
         </div>
 
         <div class="footer">
-          © ${new Date().getFullYear()} LocalAwaaz. All rights reserved.
+          You're receiving this email because a verification code was requested for your
+          LocalAwaaz account. If this wasn't you, please ignore this email.
         </div>
+
       </div>
-    </body>
-  </html>
+    </div>
+  </body>
+</html>
   `;
 };
 

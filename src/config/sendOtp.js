@@ -15,7 +15,7 @@ async function sendMail({ email, generatedOtp }) {
         const info = await transporter.sendMail({
             from: process.env.EMAIL,
             to: email,
-            subject: "Email Verification OTP",
+            subject: "Email Authentication",
             html: otpEmailTemplate(generatedOtp)
         });
 

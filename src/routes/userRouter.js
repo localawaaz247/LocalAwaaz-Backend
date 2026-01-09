@@ -40,7 +40,7 @@ userRouter.post('/user/signup', async (req, res) => {
 userRouter.post('/user/send-otp', async (req, res) => {
     try {
         const { email, userName } = req.body;
-        if (!validate.isEmail(email)) {
+        if (!email || !validate.isEmail(email)) {
             return res.status(400).json({ success: false, message: "Enter Valid email id" });
         }
         const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -54,8 +54,9 @@ userRouter.post('/user/send-otp', async (req, res) => {
             await OtpModel.create({ email, otp: hashedOtp, expiresAt });
         }
 
-        res.status(200).json({ success: true, message: "If email exists, OTP has been sent" });
+        res.status(200).json({ success: true, message: "OTP sent on email id" });
     } catch (err) {
+        console.log(err)
         res.status(400).json({ success: false, message: "Enter valid email id" });
     }
 })
