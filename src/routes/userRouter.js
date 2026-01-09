@@ -30,7 +30,7 @@ userRouter.post('/user/signup', async (req, res) => {
             sameSite: 'strict',
             secure: true
         });
-        res.status(200).json({ success: true, message: "SignUp Successfull" });
+        res.status(200).json({ success: true, message: "Signup Successful" });
     } catch (err) {
         res.status(400).json({ success: false, message: err.message });
     }
