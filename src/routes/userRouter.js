@@ -1,13 +1,13 @@
 const express = require('express');
 const { sendMail } = require('../config/sendOtp')
-const validateSignUpData = require('../../utils/validateSignUpData');
+const validateSignUpData = require('../utils/validateSignUpData');
 const verifyOtp = require('../config/verifyOtp');
 const validate = require('validator');
 const OtpModel = require('../models/Otp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
-const checkUniqueness = require('../../utils/checkUniqueness');
+const checkUniqueness = require('../utils/checkUniqueness');
 const userRouter = express.Router();
 
 userRouter.post('/user/signup', async (req, res) => {

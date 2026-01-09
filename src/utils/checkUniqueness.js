@@ -1,4 +1,4 @@
-const User = require("../src/models/User");
+const User = require("../models/User");
 
 const checkUniqueness = async (req) => {
     const { userName, email, mobile } = req.body;
