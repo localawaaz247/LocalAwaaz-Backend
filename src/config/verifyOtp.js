@@ -10,7 +10,7 @@ const verifyOtp = async (email, enteredOtp) => {
         throw new Error("OTP expired");
     }
     if (attempts >= 5) {
-        throw new Error("Maximum attempts reached! Try again after some time");
+        throw new Error("Too many attempts! Try again after some time");
     }
     const isMatch = await bcrypt.compare(enteredOtp, otp);
     if (!isMatch) {
@@ -20,6 +20,7 @@ const verifyOtp = async (email, enteredOtp) => {
     }
     record.isVerified = true;
     record.expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    record.otp = null;
     await record.save();
     return true;
 }

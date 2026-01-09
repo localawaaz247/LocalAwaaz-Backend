@@ -23,6 +23,6 @@ const checkUniqueness = async (req) => {
     if (mobile.toString().length !== 10) {
         throw new Error("Mobile must be of 10 digits");
     }
-
+    
 }
 module.exports = checkUniqueness

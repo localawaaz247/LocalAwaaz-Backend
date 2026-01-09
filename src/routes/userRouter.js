@@ -1,5 +1,5 @@
 const express = require('express');
-const { sendMail } = require('../config/sendOtp')
+const { sendMail } = require('../config/sendOtp');
 const validateSignUpData = require('../utils/validateSignUpData');
 const verifyOtp = require('../config/verifyOtp');
 const validate = require('validator');
@@ -15,14 +15,15 @@ userRouter.post('/user/signup', async (req, res) => {
         const { userName, password, name, profilePic, email, gender, mobile, country, state, district, pinCode } = req.body;
         validateSignUpData(req);
         await checkUniqueness(req);
+        const role = 'user'
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ userName, password: hashedPassword, email, name, profilePic, gender, mobile, country, state, district, pinCode });
+        const user = await User.create({ userName, password: hashedPassword, email, role, name, profilePic, gender, mobile, country, state, district, pinCode });
         const otpRecord = await OtpModel.findOne({ email, isVerified: true });
         if (otpRecord) {
             user.isVerified = true;
             await user.save();
         }
-        const token = jwt.sign({ userName: user.userName }, process.env.JWT_PRIVATE_KEY, {
+        const token = jwt.sign({ userName: user.userName, role: user.role }, process.env.JWT_PRIVATE_KEY, {
             expiresIn: '7d'
         });
         res.cookie("token", token, {
@@ -40,7 +41,7 @@ userRouter.post('/user/send-otp', async (req, res) => {
     try {
         const { email, userName } = req.body;
         if (!validate.isEmail(email)) {
-            return res.status(400).json({ message: "Enter Valid email id" });
+            return res.status(400).json({ success: false, message: "Enter Valid email id" });
         }
         const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
         const hashedOtp = await bcrypt.hash(generatedOtp, 10);
@@ -68,7 +69,7 @@ userRouter.post('/user/verify-otp', async (req, res) => {
 
         await verifyOtp(email, otp);
         if (userName) {
-            const userRecord = await OtpModel.findOne({ userName });
+            const userRecord = await OtpModel.findOne({ email, userName });
             if (userRecord) {
                 const user = await User.findOne({ userName });
                 user.isVerified = true
