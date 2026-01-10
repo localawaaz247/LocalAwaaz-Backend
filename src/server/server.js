@@ -4,8 +4,10 @@ const authRouter = require('../routes/authRouter');
 const otpRouter = require('../routes/otpRouter');
 require('dotenv').config()
 const app = express();
-app.use(express.json());
+const cookieParser = require('cookie-parser');
 
+app.use(express.json());
+app.use(cookieParser());
 app.use("/", authRouter);
 app.use("/", otpRouter);
 
