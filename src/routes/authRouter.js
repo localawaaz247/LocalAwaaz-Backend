@@ -55,7 +55,7 @@ authRouter.post('/auth/login', async (req, res) => {
         res.json({ accessToken, user: userObj });
     }
     catch (err) {
-        res.status(401).json({ success: false, message: "Unauthorized access" });
+        res.status(401).json({ success: false, message: "Unauthorized Access" });
     }
 })
 
