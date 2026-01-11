@@ -1,6 +1,6 @@
 const validate = require('validator');
 
-const validateSignUpData = (req) => {
+const validateLocalSignupData = (req) => {
     const { userName, password, email, name, profilePic, gender, mobile, country, state, district, pinCode } = req.body;
     const allowedGender = ['male', 'female', 'other'];
     const userNameRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d_@]+$/;
@@ -11,7 +11,7 @@ const validateSignUpData = (req) => {
         throw new Error("userName is required");
     }
     if (userName.trim().length < 4) {
-        throw new Error('userName must be at least 4 characters long');
+        throw new Error('username too short');
     }
     if (!userNameRegex.test(userName)) {
         throw new Error('userName must contain at least 1 uppercase, 1 lowercase, 1 number and only _ or @ are allowed');
@@ -54,4 +54,4 @@ const validateSignUpData = (req) => {
     }
     return true;
 }
-module.exports = validateSignUpData
+module.exports = validateLocalSignupData
