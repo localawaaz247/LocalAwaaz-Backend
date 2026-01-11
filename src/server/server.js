@@ -1,15 +1,18 @@
+require('dotenv').config()
 const express = require('express');
 const connectDB = require('../database/connectDB');
 const authRouter = require('../routes/authRouter');
 const otpRouter = require('../routes/otpRouter');
-require('dotenv').config()
+const cors = require('cors');
 const app = express();
 const cookieParser = require('cookie-parser');
 
+app.use(cors());
 app.use(express.json());
 app.use(cookieParser());
 app.use("/", authRouter);
 app.use("/", otpRouter);
+
 
 const startServer = async () => {
     try {
