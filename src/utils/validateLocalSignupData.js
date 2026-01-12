@@ -14,7 +14,7 @@ const validateLocalSignupData = (req) => {
         throw new Error('username too short');
     }
     if (!userNameRegex.test(userName)) {
-        throw new Error('userName must contain at least 1 uppercase, 1 lowercase, 1 number and only _ or @ are allowed');
+        throw new Error('username with (a-z), (A-Z), (0-9) and (_ or @) are allowed');
     }
     if (!password) {
         throw new Error('Password is required');
