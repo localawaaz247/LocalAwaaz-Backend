@@ -1,11 +1,13 @@
 const express = require('express');
-const validateSignUpData = require('../utils/validateSignUpData');
+const validateSignUpData = require('../utils/validateLocalSignupData');
 const OtpModel = require('../models/Otp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const checkUniqueness = require('../utils/checkUniqueness');
 const { generateAccessToken, generateRefreshToken } = require('../config/tokens');
+require('dotenv').config();
+const passport = require('passport');
 
 const authRouter = express.Router();
 
@@ -87,5 +89,24 @@ authRouter.post('/auth/logout', (req, res) => {
         res.status(500).json({ success: false, message: "Error in Logging out" })
     }
 })
+
+authRouter.get("/auth/google", passport.authenticate("google", { scope: ["profile", "email"] }));
+authRouter.get(
+    "/auth/google/callback",
+    passport.authenticate("google", {
+        failureRedirect: "/login",
+        session: true, // keep passport session
+    }),
+    (req, res) => {
+        // Successful login
+        if (!req.user.isProfileComplete) {
+            // Redirect user to frontend complete-profile page
+            const accessToken = generateAccessToken(req.user._id);
+            return res.redirect(`${process.env.FRONTEND_URL}/complete-profile?token=${accessToken}`);
+        }
+        // If profile is complete, redirect to dashboard
+        res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+    }
+);
 
 module.exports = authRouter

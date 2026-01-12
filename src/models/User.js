@@ -5,9 +5,9 @@ const userSchema = new mongoose.Schema({
     },
     userName: {
         type: String,
-        required: [true, "userName is required"],
         trim: true,
-        unique: true
+        unique: true,
+        sparse: true
     },
     password: {
         type: String
@@ -50,30 +50,26 @@ const userSchema = new mongoose.Schema({
             }
         },
         country: {
-            type: String,
-            required: [true, 'Country is Required']
+            type: String
         },
         state: {
-            type: String,
-            required: [true, "State is Required"]
+            type: String
         },
         district: {
-            type: String,
-            required: [true, "District is Required"]
+            type: String
         },
         pinCode: {
-            type: Number,
-            required: [true, "pinCode is Required"],
-            validate: {
-                validator: v => v.toString().length === 6,
-                message: "PinCode must be of 6 digits"
-            }
+            type: Number
         },
     },
     googleId: {
         type: String,
         unique: true,
         sparse: true
+    },
+    isProfileComplete: {
+        type: Boolean,
+        default: false
     }
 },
     {
