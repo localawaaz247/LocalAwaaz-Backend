@@ -3,10 +3,8 @@ const express = require('express');
 const connectDB = require('../database/connectDB');
 const authRouter = require('../routes/authRouter');
 const otpRouter = require('../routes/otpRouter');
-<<<<<<< HEAD
+
 const cors = require('cors');
-=======
->>>>>>> feature/auth
 const app = express();
 const cookieParser = require('cookie-parser');
 const session = require("express-session");
