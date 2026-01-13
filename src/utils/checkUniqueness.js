@@ -5,19 +5,19 @@ const checkUniqueness = async (req) => {
     if (userName) {
         const record = await User.findOne({ userName });
         if (record) {
-            throw new Error("userName should be unique; userName: 1 uppercase, 1 lowercase, 1 number; only _ or @ allowed.")
+            throw new Error("Username already taken")
         }
     }
     if (email) {
         const record = await User.findOne({ email });
         if (record) {
-            throw new Error("Email may exists");
+            throw new Error("Email is already registered");
         }
     }
     if (mobile) {
         const record = await User.findOne({ mobile })
         if (record) {
-            throw new Error("Mobile may exists");
+            throw new Error("Mobile number is already registered");
         }
     }
     if (mobile && mobile.toString().length !== 10) {
