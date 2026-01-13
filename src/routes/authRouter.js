@@ -8,6 +8,7 @@ const checkUniqueness = require('../utils/checkUniqueness');
 const { generateAccessToken, generateRefreshToken } = require('../config/tokens');
 require('dotenv').config();
 const passport = require('passport');
+const LoginAttempt = require('../models/LoginAttempt');
 
 const authRouter = express.Router();
 
@@ -18,7 +19,8 @@ authRouter.post('/auth/register', async (req, res) => {
         await checkUniqueness(req);
         const role = 'user'
         const hashedPassword = await bcrypt.hash(password, 10);
-        const user = await User.create({ userName, password: hashedPassword, role, name, contact: { email, gender, country, state, district, pinCode } });
+        const isProfileComplete = true;
+        const user = await User.create({ userName, password: hashedPassword, role, name, isProfileComplete, contact: { email, gender, country, state, district, pinCode, isProfileComplete } });
         const otpRecord = await OtpModel.findOne({ email, isVerified: true });
         if (otpRecord) {
             user.isVerified = true;
@@ -42,16 +44,44 @@ authRouter.post('/auth/login', async (req, res) => {
         if (!user) {
             return res.status(400).json({ success: false, message: "Invalid User credentials" })
         }
-        const isMatch = bcrypt.compare(password, user.password);
+        //check for attempts
+        let attempt = await LoginAttempt.findOne({ userId: user._id });
+        if (!attempt) {
+            attempt = await LoginAttempt.create({ userId: user._id });
+        }
+        //if attempts goes higher block the block next attempts
+        if (attempt.lockUntil && attempt.lockUntil > Date.now()) {
+            return res.status(429).json({ success: false, message: "Too many attempts.Try again Later" });
+        }
+
+        const isMatch = await bcrypt.compare(password, user.password);
+
+        //if password not matched increase the attempts
         if (!isMatch) {
+            attempt.failedAttempts += 1;
+            attempt.lastAttempt = Date.now();
+
+            if (attempt.failedAttempts === 3) {
+                attempt.lockUntil = new Date(Date.now() + 30 * 1000);
+            } else if (attempt.failedAttempts === 5) {
+                attempt.lockUntil = new Date(Date.now() + 5 * 60 * 1000);
+            }
+            await attempt.save();
             return res.status(400).json({ success: false, message: "Invalid User credentials" })
         }
+
+        attempt.failedAttempts = 0;
+        attempt.lastAttempt = new Date();
+        attempt.lockUntil = null;
+        await attempt.save();
+
         const accessToken = generateAccessToken(user._id);
         const refreshToken = generateRefreshToken(user._id);
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             path: '/refresh_token'
         })
+        // remove pass from user then send to frontend
         const userObj = user.toObject();
         delete userObj.password;
         res.json({ accessToken, user: userObj });
