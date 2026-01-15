@@ -28,6 +28,7 @@ authRouter.post('/auth/register', async (req, res) => {
         }
         res.status(200).json({ success: true, message: "Signup Successful" });
     } catch (err) {
+        console.log(err)
         res.status(400).json({ success: false, message: err.message });
     }
 })

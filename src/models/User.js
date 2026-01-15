@@ -6,7 +6,7 @@ const userSchema = new mongoose.Schema({
     userName: {
         type: String,
         trim: true,
-        unique: true,
+        unique: [true, "UserName already exists"],
         sparse: true
     },
     password: {
@@ -36,13 +36,13 @@ const userSchema = new mongoose.Schema({
             default: null,
             trim: true,
             sparse: true,
-            unique: true,
+            unique: [true, "Email already exists"],
             lowercase: true
         },
         mobile: {
             type: Number,
             sparse: true, // allows null values
-            unique: true,
+            unique: [true, "Mobile Number already registered"],
             validate: {
                 validator: v => v === null || v.toString().length === 10,
                 message: "Mobile number must be 10 digits"
@@ -63,7 +63,7 @@ const userSchema = new mongoose.Schema({
     },
     googleId: {
         type: String,
-        unique: true,
+        unique: [true, "Needed unique id"],
         sparse: true
     },
     isProfileComplete: {
