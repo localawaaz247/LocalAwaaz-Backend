@@ -14,13 +14,13 @@ const authRouter = express.Router();
 
 authRouter.post('/auth/register', async (req, res) => {
     try {
-        const { userName, password, name, email, gender, country, state, district, pinCode } = req.body;
+        const { userName, password, name, email, gender, country, state, city, pinCode } = req.body;
         validateSignUpData(req);
         await checkUniqueness(req);
         const role = 'user'
         const hashedPassword = await bcrypt.hash(password, 10);
         const isProfileComplete = true;
-        const user = await User.create({ userName, password: hashedPassword, role, name, isProfileComplete, contact: { email, gender, country, state, district, pinCode, isProfileComplete } });
+        const user = await User.create({ userName, password: hashedPassword, role, name, isProfileComplete, contact: { email, gender, country, state, city, pinCode, isProfileComplete } });
         const otpRecord = await OtpModel.findOne({ email, isVerified: true });
         if (otpRecord) {
             user.isVerified = true;

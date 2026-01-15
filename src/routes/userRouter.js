@@ -7,7 +7,7 @@ const validate = require('validator');
 // Complete profile route
 userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
     try {
-        const { userName, gender, mobile, country, state, district, pinCode } = req.body;
+        const { userName, gender, mobile, country, state, city, pinCode } = req.body;
 
         // Optional: you can run a partial validator for only these fields
         const userNameRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d_@]+$/;
@@ -30,7 +30,7 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         user.contact.mobile = mobile;
         user.contact.country = country;
         user.contact.state = state;
-        user.contact.district = district;
+        user.contact.city = city;
         user.contact.pinCode = pinCode;
         user.isProfileComplete = true;
 

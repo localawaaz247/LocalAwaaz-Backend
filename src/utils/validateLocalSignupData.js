@@ -1,7 +1,7 @@
 const validate = require('validator');
 
 const validateLocalSignupData = (req) => {
-    const { userName, password, email, name, profilePic, gender, mobile, country, state, district, pinCode } = req.body;
+    const { userName, password, email, name, profilePic, gender, mobile, country, state, city, pinCode } = req.body;
     const allowedGender = ['male', 'female', 'other'];
     const userNameRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)[A-Za-z\d_@]+$/;
     if (!name || name.trim().length < 3) {
@@ -43,8 +43,8 @@ const validateLocalSignupData = (req) => {
     if (!state) {
         throw new Error('Select State');
     }
-    if (!district) {
-        throw new Error('Enter District');
+    if (!city) {
+        throw new Error('Enter city');
     }
     if (!pinCode) {
         throw new Error('Enter PinCode');

@@ -54,7 +54,7 @@ const userSchema = new mongoose.Schema({
         state: {
             type: String
         },
-        district: {
+        city: {
             type: String
         },
         pinCode: {
