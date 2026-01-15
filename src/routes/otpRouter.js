@@ -112,7 +112,7 @@ otpRouter.post('/otp/request', async (req, res) => {
         const hashedOtp = await bcrypt.hash(generatedOtp, 10);
 
         // Send OTP email
-        // await sendMail({ email, generatedOtp });
+        await sendMail({ email, generatedOtp });
 
         const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
