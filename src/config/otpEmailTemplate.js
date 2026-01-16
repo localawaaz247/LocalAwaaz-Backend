@@ -1,126 +1,176 @@
 const otpEmailTemplate = (otp) => {
+  // Split OTP into individual digits
+  const otpArray = otp.toString().split('');
+
   return `
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Verify your identity in - LocalAwaaz</title>
-    <style>
-      body {
-        margin: 0;
-        padding: 0;
-        background-color: #ffffff;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-        color: #24292f;
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LocalAwaaz Verification</title>
+  <style>
+    /* Reset & Base */
+    body { margin: 0; padding: 0; background-color: #f4f6f8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased; }
+    table { border-spacing: 0; width: 100%; }
+    td { padding: 0; }
+    img { border: 0; }
+
+    /* Container */
+    .wrapper { width: 100%; table-layout: fixed; background-color: #f4f6f8; padding-bottom: 40px; }
+    .main-card { background-color: #ffffff; margin: 0 auto; width: 100%; max-width: 500px; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+
+    /* Header */
+    .header { 
+      background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%); 
+      padding: 30px 20px; 
+      text-align: center; 
+    }
+    .header h1 { color: #ffffff; margin: 0; font-size: 24px; font-weight: 700; letter-spacing: 0.5px; }
+    .header-subtitle { color: rgba(255,255,255,0.9); font-size: 14px; margin-top: 5px; font-weight: 400; }
+
+    /* Body Content */
+    .content { padding: 30px 20px; text-align: center; }
+    
+    /* Secure Badge */
+    .secure-badge { 
+      background-color: #EFF6FF; 
+      color: #2563EB; 
+      display: inline-block; 
+      padding: 4px 12px; 
+      border-radius: 20px; 
+      font-size: 12px; 
+      font-weight: 600; 
+      margin-bottom: 20px;
+    }
+
+    /* Headlines */
+    .h2 { color: #1F2937; font-size: 20px; font-weight: 700; margin: 0 0 10px; }
+    .subtext { color: #6B7280; font-size: 14px; line-height: 1.5; margin: 0 0 25px; }
+
+    /* OTP Section */
+    .otp-container {
+      background-color: #F9FAFB;
+      border: 2px dashed #E5E7EB;
+      border-radius: 12px;
+      padding: 20px 5px; /* Reduced padding for mobile safety */
+      margin-bottom: 24px;
+    }
+    
+    /* Default (Desktop) OTP Digit Style */
+    .otp-digit {
+      display: inline-block;
+      width: 40px;
+      height: 48px;
+      line-height: 48px;
+      background-color: #ffffff;
+      border: 1px solid #D1D5DB;
+      border-radius: 8px;
+      font-size: 24px;
+      font-weight: 700;
+      color: #2563EB;
+      margin: 0 3px; /* Reduced margin */
+      box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+      text-align: center;
+    }
+
+    /* Mobile Responsive Tweaks */
+    @media only screen and (max-width: 480px) {
+      .otp-digit {
+        width: 32px !important;     /* Force smaller width */
+        height: 40px !important;    /* Force smaller height */
+        line-height: 40px !important;
+        font-size: 18px !important; /* Smaller font */
+        margin: 0 2px !important;   /* Tighter spacing */
       }
-
-      .wrapper {
-        width: 100%;
-        padding: 24px 0;
+      .content {
+        padding: 20px 15px !important;
       }
-
-      .container {
-        max-width: 480px;
-        margin: 0 auto;
-        padding: 0 16px;
+      .header {
+        padding: 20px 15px !important;
       }
+    }
 
-      .logo {
-        text-align: center;
-        margin-bottom: 24px;
-      }
+    .expiry-text { color: #6B7280; font-size: 13px; margin-top: 15px; }
 
-      .logo img {
-        width: 32px;
-        height: 32px;
-      }
+    /* Security Notice Box */
+    .security-notice {
+      background-color: #FFF7ED;
+      border-left: 4px solid #F97316;
+      border-radius: 4px;
+      padding: 12px;
+      text-align: left;
+      margin-top: 25px;
+    }
+    .notice-title { color: #9A3412; font-size: 12px; font-weight: 700; margin-bottom: 4px; display: block; }
+    .notice-body { color: #9A3412; font-size: 12px; margin: 0; line-height: 1.4; }
 
-      h1 {
-        font-size: 24px;
-        font-weight: 300;
-        text-align: center;
-        margin: 0 0 24px 0;
-      }
+    /* Footer */
+    .footer { text-align: center; padding-top: 30px; color: #9CA3AF; font-size: 11px; line-height: 1.5; }
+    .footer strong { color: #6B7280; }
+    .footer-links a { color: #6B7280; text-decoration: none; margin: 0 5px; }
+  </style>
+</head>
+<body>
 
-      h1 strong {
-        font-weight: 600;
-      }
+<div class="wrapper">
+  <br>
+  <table class="main-card" align="center">
+    
+    <tr>
+      <td class="header">
+        <div style="margin-bottom: 10px;">
+           <span style="background: rgba(255,255,255,0.2); border-radius: 12px; padding: 8px 12px; display: inline-block;">
+             <span style="font-size: 24px; line-height: 1;">✉️</span>
+           </span>
+        </div>
+        <h1>LocalAwaaz</h1>
+        <div class="header-subtitle">Your Voice, Your Community</div>
+      </td>
+    </tr>
 
-      .box {
-        border: 1px solid #d0d7de;
-        border-radius: 6px;
-        padding: 24px;
-        font-size: 14px;
-        line-height: 1.5;
-      }
-
-      .otp {
-        font-size: 32px;
-        font-weight: 600;
-        letter-spacing: 4px;
-        text-align: center;
-        margin: 16px 0;
-      }
-
-      .muted {
-        color: #57606a;
-      }
-
-      .bold {
-        font-weight: 600;
-      }
-
-      .footer {
-        margin-top: 24px;
-        font-size: 12px;
-        color: #57606a;
-        text-align: center;
-      }
-    </style>
-  </head>
-
-  <body>
-    <div class="wrapper">
-      <div class="container">
-
-       <!-- <div class="logo"> -->
-          <!-- Replace src with your hosted logo if needed -->
-        <!--  <img src="https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png" alt="Logo" /> -->
-        <!-- </div> -->
-
-        <h1>
-          Please verify your identity in 
-          <strong>LocalAwaaz</strong>
-        </h1>
-
-        <div class="box">
-          <p>Here is your LocalAwaaz authentication code:</p>
-
-          <div class="otp">${otp}</div>
-
-          <p class="muted">
-            This code is valid for <strong>10 minutes</strong> and can only be used once.
-          </p>
-
-          <p class="bold">
-            Please don't share this code with anyone:
-            <span class="muted">
-              LocalAwaaz will never ask for it on the phone or via email.
-            </span>
-          </p>
-
-          <p>Thanks,<br />The LocalAwaaz Team</p>
+    <tr>
+      <td class="content">
+        
+        <div class="secure-badge">
+          🔒 Secure Verification
         </div>
 
-        <div class="footer">
-          You're receiving this email because a verification code was requested for your
-          LocalAwaaz account. If this wasn't you, please ignore this email.
+        <div class="h2">Your Verification Code</div>
+        <div class="subtext">
+          Enter this code to verify your identity.
         </div>
 
-      </div>
+        <div class="otp-container">
+          ${otpArray.map(digit => `<span class="otp-digit">${digit}</span>`).join('')}
+          
+          <div class="expiry-text">
+            This code expires in <strong>10 minutes</strong>
+          </div>
+        </div>
+
+        <div class="security-notice">
+          <span class="notice-title">🛡 Security Notice</span>
+          <p class="notice-body">
+            LocalAwaaz will <strong>never</strong> ask for this code via phone, email, or chat. Keep it confidential.
+          </p>
+        </div>
+
+      </td>
+    </tr>
+  </table>
+
+  <div class="footer">
+    <strong>LocalAwaaz • Community Voice Platform</strong><br>
+    India<br><br>
+    <div class="footer-links">
+      <a href="#">Privacy Policy</a> • <a href="#">Terms of Service</a> • <a href="#">Support</a>
     </div>
-  </body>
+  </div>
+
+</div>
+
+</body>
 </html>
   `;
 };
