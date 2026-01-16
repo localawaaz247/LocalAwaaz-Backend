@@ -9,7 +9,7 @@ require("dotenv").config();
  */
 const transporter = nodemailer.createTransport({
   host: "smtp.sendgrid.net",
-  port: 587,
+  port: 2525,
   secure: false, // TLS
   auth: {
     user: "apikey", // ⚠️ ALWAYS literally "apikey"
