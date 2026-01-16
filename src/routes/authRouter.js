@@ -314,7 +314,7 @@ authRouter.get(
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}/dashboard`);
+        res.redirect(`${process.env.FRONTEND_URL}/homepage`);
     }
 );
 

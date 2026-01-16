@@ -18,7 +18,7 @@ const User = require("../models/User");
  */
 const checkUniqueness = async (req) => {
     try {
-        const { userName, email, mobile } = req.body;
+        const { userName, email } = req.body; // can send mobile also
 
         /**
          * ----------------------------
@@ -51,12 +51,12 @@ const checkUniqueness = async (req) => {
          * ----------------------------
          * Mobile is stored inside contact object
          */
-        if (mobile) {
-            const record = await User.findOne({ "contact.mobile": mobile });
-            if (record) {
-                throw new Error("Mobile number is already registered");
-            }
-        }
+        // if (mobile) {
+        //     const record = await User.findOne({ "contact.mobile": mobile });
+        //     if (record) {
+        //         throw new Error("Mobile number is already registered");
+        //     }
+        // }
 
         /**
          * ----------------------------
@@ -64,9 +64,9 @@ const checkUniqueness = async (req) => {
          * ----------------------------
          * Ensures mobile number is exactly 10 digits
          */
-        if (mobile && mobile.toString().length !== 10) {
-            throw new Error("Mobile must be of 10 digits");
-        }
+        // if (mobile && mobile.toString().length !== 10) {
+        //     throw new Error("Mobile must be of 10 digits");
+        // }
     }
     catch (err) {
         /**

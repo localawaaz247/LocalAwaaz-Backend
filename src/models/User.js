@@ -114,15 +114,15 @@ const userSchema = new mongoose.Schema({
          * - Sparse index allows null values
          * - Validated to be exactly 10 digits
          */
-        mobile: {
-            type: Number,
-            sparse: true,
-            unique: [true, "Mobile Number already registered"],
-            validate: {
-                validator: v => v === null || v.toString().length === 10,
-                message: "Mobile number must be 10 digits"
-            }
-        },
+        // mobile: {
+        //     type: Number,
+        //     sparse: true,
+        //     unique: [true, "Mobile Number already registered"],
+        //     validate: {
+        //         validator: v => v === null || v.toString().length === 10,
+        //         message: "Mobile number must be 10 digits"
+        //     }
+        // },
 
         /**
          * Address information

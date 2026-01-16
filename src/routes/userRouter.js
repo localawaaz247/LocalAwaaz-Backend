@@ -19,7 +19,7 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         const {
             userName,
             gender,
-            mobile,
+            // mobile,
             country,
             state,
             city,
@@ -63,12 +63,12 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         }
 
         // Mobile number validation
-        if (!mobile || !validate.isMobilePhone(mobile, 'any')) {
-            return res.status(400).json({
-                success: false,
-                message: "Enter valid Mobile Number"
-            });
-        }
+        // if (!mobile || !validate.isMobilePhone(mobile, 'any')) {
+        //     return res.status(400).json({
+        //         success: false,
+        //         message: "Enter valid Mobile Number"
+        //     });
+        // }
 
         /**
          * ---------------------------------
@@ -103,7 +103,7 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         // Update missing / editable fields
         user.userName = userName;
         user.gender = gender;
-        user.contact.mobile = mobile;
+        // user.contact.mobile = mobile;
         user.contact.country = country;
         user.contact.state = state;
         user.contact.city = city;

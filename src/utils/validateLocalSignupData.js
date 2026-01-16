@@ -1,7 +1,7 @@
 const validate = require('validator');
 
 const validateLocalSignupData = (req) => {
-    const { userName, password, email, name, profilePic, gender, mobile, country, state, city, pinCode } = req.body;
+    const { userName, password, email, name, profilePic, gender, country, state, city, pinCode } = req.body; //mobile can also be send
     const allowedGender = ['male', 'female', 'other'];
     const userNameRegex = /^[\x21-\x7E]{4,10}$/;
     if (!name || name.trim().length < 3) {
@@ -34,9 +34,9 @@ const validateLocalSignupData = (req) => {
     if (profilePic && !validate.isURL(profilePic)) {
         throw new Error('Select valid Profile Picture');
     }
-    if (mobile && !validate.isMobilePhone(mobile, 'any')) {
-        throw new Error('Enter valid Mobile Number');
-    }
+    // if (mobile && !validate.isMobilePhone(mobile, 'any')) {
+    //     throw new Error('Enter valid Mobile Number');
+    // }
     if (!country) {
         throw new Error('Select Country');
     }
