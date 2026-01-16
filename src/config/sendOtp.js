@@ -25,7 +25,7 @@ const transporter = nodemailer.createTransport({
 async function sendMail({ email, generatedOtp }) {
   try {
     const info = await transporter.sendMail({
-      from: `"LocalAwaz" <no-reply@localawaaz.in>`,
+      from: `"LocalAwaaz" <no-reply@localawaaz.in>`,
       to: email,
       subject: "Email Verification OTP",
       html: otpEmailTemplate(generatedOtp),
