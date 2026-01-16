@@ -4,17 +4,17 @@ require("dotenv").config();
 
 /**
  * ============================
- * SENDGRID SMTP TRANSPORTER
+ * BREVO SMTP TRANSPORTER
  * ============================
  */
 const transporter = nodemailer.createTransport({
-  host: "smtp.sendgrid.net",
-  port: 2525,
-  secure: false, // TLS
+  host: "smtp-relay.brevo.com",
+  port: 587,
+  secure: false, // MUST be false for port 587
   auth: {
-    user: "apikey", // ⚠️ ALWAYS literally "apikey"
-    pass: process.env.SENDGRID_API_KEY
-  }
+    user: process.env.BREVO_SMTP_USER, // your Brevo login email
+    pass: process.env.BREVO_SMTP_KEY,  // SMTP key from Brevo
+  },
 });
 
 /**
@@ -25,15 +25,16 @@ const transporter = nodemailer.createTransport({
 async function sendMail({ email, generatedOtp }) {
   try {
     const info = await transporter.sendMail({
-      from: `"LocalAwaaz" <${process.env.SENDGRID_FROM_EMAIL}>`,
+      from: `"LocalAwaz" <no-reply@localawaaz.in>`,
       to: email,
       subject: "Email Verification OTP",
-      html: otpEmailTemplate(generatedOtp)
+      html: otpEmailTemplate(generatedOtp),
     });
 
-    console.log("Email sent:", info.response);
+    console.log("Email sent:", info.messageId);
   } catch (error) {
     console.error("Error sending mail:", error);
+    throw error; // important: don't silently swallow OTP failures
   }
 }
 
