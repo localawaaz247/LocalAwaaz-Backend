@@ -18,6 +18,7 @@ passport.use(
             clientID: process.env.GOOGLE_CLIENT_ID,           // Google OAuth client ID
             clientSecret: process.env.GOOGLE_CLIENT_SECRET,   // Google OAuth client secret
             callbackURL: "/auth/google/callback",            // URL Google redirects to after login
+            proxy: true
         },
         async (accessToken, refreshToken, profile, done) => {
             try {
