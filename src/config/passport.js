@@ -3,85 +3,76 @@ const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const User = require("../models/User");
 require('dotenv').config();
 
-/**
- * ============================
- * GOOGLE OAUTH PASSPORT STRATEGY
- * ============================
- * Purpose:
- * - Authenticate users using Google OAuth
- * - Link Google account with existing users if email matches
- * - Create new user if none exists
- */
 passport.use(
     new GoogleStrategy(
         {
-            clientID: process.env.GOOGLE_CLIENT_ID,           // Google OAuth client ID
-            clientSecret: process.env.GOOGLE_CLIENT_SECRET,   // Google OAuth client secret
-            callbackURL: "/auth/google/callback",            // URL Google redirects to after login
+            clientID: process.env.GOOGLE_CLIENT_ID,
+            clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+            callbackURL: "/auth/google/callback",
             proxy: true
         },
         async (accessToken, refreshToken, profile, done) => {
             try {
-                // Extract email from Google profile
-                const email = profile.emails?.[0]?.value;
-                if (!email) {
+                const emailObj = profile.emails?.[0];
+
+                // 1. SECURITY CHECK: Ensure Google has verified this email
+                // This prevents the "Unverified Email Takeover" attack
+                if (!emailObj || !emailObj.verified) {
                     return done(
-                        new Error('Google account does not provide an email'),
+                        new Error('Google account email is not verified.'),
                         null
                     );
                 }
 
-                // Check if user already exists:
-                // - Either linked with GoogleId
-                // - Or email matches existing account
-                let user = await User.findOne({
-                    $or: [{ googleId: profile.id }, { "contact.email": email }],
-                });
+                const email = emailObj.value;
 
-                if (user) {
-                    // Existing user without GoogleId → link account
-                    if (!user.googleId) {
-                        user.googleId = profile.id;
-                        user.contact.email = email; // ensure email is stored
-                        await user.save();
+                // 2. Find user by Google ID first
+                let user = await User.findOne({ googleId: profile.id });
+
+                if (!user) {
+                    // 3. If no user by Google ID, check if email exists
+                    const emailUser = await User.findOne({ "contact.email": email });
+
+                    if (emailUser) {
+                        // 4. PREVENT MERGE CONFLICTS
+                        // If this email user already has a DIFFERENT googleId linked, 
+                        // we must stop. This means one email is trying to link to two 
+                        // different Google accounts (rare, but possible).
+                        if (emailUser.googleId) {
+                            return done(
+                                new Error("This email is already linked to another Google account"),
+                                null
+                            );
+                        }
+
+                        // Link the account
+                        emailUser.googleId = profile.id;
+                        // Optional: Update profile pic if they don't have one
+                        if (!emailUser.profilePic) {
+                            emailUser.profilePic = profile.photos?.[0]?.value;
+                        }
+                        user = await emailUser.save();
+
+                    } else {
+                        // 5. Create entirely new user
+                        user = await User.create({
+                            name: profile.displayName,
+                            contact: { email },
+                            googleId: profile.id,
+                            profilePic: profile.photos?.[0]?.value,
+                            isVerified: true,
+                            isProfileComplete: false,
+                        });
                     }
-                } else {
-                    // New user → create user record
-                    user = await User.create({
-                        name: profile.displayName,
-                        contact: { email },
-                        googleId: profile.id,
-                        profilePic: profile.photos?.[0]?.value,
-                        isVerified: !!email,           // mark verified if email exists
-                        isProfileComplete: false,      // force profile completion later
-                    });
                 }
 
-                // Continue Passport flow
                 return done(null, user);
 
             } catch (err) {
-                // Pass error to Passport
-                return done(err);
+                return done(err, null);
             }
         }
     )
 );
-
-/**
- * ----------------------------
- * SERIALIZE & DESERIALIZE USER
- * ----------------------------
- * Required for Passport session support.
- */
-
-// Serialize user ID into session cookie
-passport.serializeUser((user, done) => done(null, user.id));
-
-// Deserialize user from session cookie into req.user
-passport.deserializeUser(async (id, done) => {
-    const user = await User.findById(id);
-    done(null, user);
-});
 
 module.exports = passport;

@@ -298,7 +298,7 @@ authRouter.get(
     "/auth/google/callback",
     passport.authenticate("google", {
         failureRedirect: "/login",
-        session: true // maintain passport session
+        session: false // do not use passport session
     }),
     (req, res) => {
         /**
@@ -306,15 +306,15 @@ authRouter.get(
          * redirect user to complete profile page
          * with access token.
          */
+        const accessToken = generateAccessToken(req.user._id);
         if (!req.user.isProfileComplete) {
-            const accessToken = generateAccessToken(req.user._id);
             return res.redirect(
                 `${process.env.FRONTEND_URL}/complete-profile?token=${accessToken}`
             );
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}/homepage`);
+        res.redirect(`${process.env.FRONTEND_URL}/homepage?token=${accessToken}`);
     }
 );
 
