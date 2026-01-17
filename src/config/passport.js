@@ -13,6 +13,13 @@ passport.use(
         },
         async (accessToken, refreshToken, profile, done) => {
             try {
+                // This is how profile looks like 
+                //   {
+                //     id: "googleId123",
+                //     displayName: "John Doe",
+                //     emails: [{ value: "user@gmail.com", verified: true }],
+                //     photos: [{ value: "profilePicUrl" }]
+                //   }
                 const emailObj = profile.emails?.[0];
 
                 // 1. SECURITY CHECK: Ensure Google has verified this email
