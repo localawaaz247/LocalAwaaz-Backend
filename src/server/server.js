@@ -32,6 +32,10 @@ app.use("/", authRouter);
 app.use("/", otpRouter);
 app.use('/', userRouter);
 
+// A simple route to keep the server awake
+app.get('/ping', (req, res) => {
+    res.status(200).send('Pong! Server is awake.');
+});
 
 const startServer = async () => {
     try {
