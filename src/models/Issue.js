@@ -14,7 +14,6 @@ const issueModel = new mongoose.Schema({
     },
     category: {
         type: String,
-        enum: ["ROAD", "WATER", "ELECTRICITY", "SANITATION", "SAFETY", "OTHER"],
         required: [true, 'category is required'],
         uppercase: true,
         index: true
@@ -42,6 +41,16 @@ const issueModel = new mongoose.Schema({
                 required: true,
             }
         }
+    },
+    confirmations: [
+        {
+            user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            confirmedAt: { type: Date, default: Date.now }
+        }
+    ],
+    confirmationCount: {
+        type: Number,
+        default: 0
     },
     status: {
         type: String,
@@ -73,6 +82,15 @@ const issueModel = new mongoose.Schema({
         type: String,
         enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
         default: 'LOW'
+    },
+    impactScore: {
+        type: Number
+    },
+    reportCount: {
+        type: Number
+    },
+    isFlagged: {
+        type: Boolean
     },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }

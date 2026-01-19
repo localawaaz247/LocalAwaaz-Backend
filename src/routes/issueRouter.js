@@ -246,4 +246,51 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
         });
     }
 });
+
+issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { id } = req.params;
+        const { userLng, userLat } = req.body;
+
+        if (!userLng || !userLat) {
+            return res.status(400).json({ success: false, message: "Your Location is required to confirm" });
+        }
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid issue ID" });
+        }
+
+        const issue = await Issue.findOne({
+            _id: id,
+            "location.geoData": {
+                $near: {
+                    $geometry: {
+                        type: "Point",
+                        coordinates: [parseFloat(userLng), parseFloat(userLat)]
+                    },
+                    $maxDistance: 1000
+                }
+            }
+        });
+        if (!issue) {
+            return res.status(400).json({ success: false, message: "You are too far away! You must be within 1km to confirm this issue" });
+        }
+        const alreadyConfirmed = issue.confirmations.some((conf) => {
+            return conf.user.toString() === userId.toString()
+        });
+        if (alreadyConfirmed) {
+            return res.status(400).json({ success: false, message: "You have already Confirmed the issue" });
+        }
+        issue.confirmations.push({ user: userId });
+        issue.confirmationCount = (issue.confirmationCount || 0) + 1;
+
+        await issue.save();
+        return res.status(200).json({ success: true, message: "Issue confirmed successfully", newCount: issue.confirmationCount });
+    }
+    catch (err) {
+        console.log(err);
+        return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
+    }
+})
+
 module.exports = issueRouter;

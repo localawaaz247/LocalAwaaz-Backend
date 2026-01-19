@@ -3,6 +3,8 @@ const User = require("../models/User");
 const userAuth = require("../middlewares/userAuth"); // JWT auth middleware
 const userRouter = express.Router();
 const validate = require('validator');
+const Issue = require("../models/Issue");
+const profileAuth = require("../middlewares/profileAuth");
 
 /**
  * ============================
@@ -50,7 +52,7 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         if (!userNameRegex.test(userName)) {
             return res.status(400).json({
                 success: false,
-                message: "Username must be 4–10 characters and cannot contain spaces or emojis."
+                message: "Username must be 4-10 characters and cannot contain spaces or emojis."
             });
         }
 
@@ -127,5 +129,33 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
         });
     }
 });
+
+userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { lng, lat } = req.query;
+        if (!lng || !lat) {
+            return res.status(400).json({ success: false, message: "User location required" });
+        }
+        const userLng = parseFloat(lng);
+        const userLat = parseFloat(lat);
+        const issues = await Issue.aggregate([
+            {
+                $geoNear: {
+                    near: { type: "Point", coordinates: [userLng, userLat] },
+                    distanceField: "distance",
+                    maxDistance: 100000,
+                    spherical: true,
+                    query: { isDeleted: false }
+                }
+            }
+        ]);
+        return res.status(200).json({ success: true, message: "Feed Updated Successfully", count: issues.length, data: issues });
+    }
+    catch (err) {
+        console.log("Feed error", err);
+        return res.status(500).json({ success: false, message: "Error in fetching feed" });
+    }
+})
+
 
 module.exports = userRouter;
