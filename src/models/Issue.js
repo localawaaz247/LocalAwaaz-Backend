@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const issueModel = new mongoose.Schema({
-    userId: {
+    createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         required: [true, "userid is required"],
         ref: 'User',
@@ -16,6 +16,7 @@ const issueModel = new mongoose.Schema({
         type: String,
         enum: ["ROAD", "WATER", "ELECTRICITY", "SANITATION", "SAFETY", "OTHER"],
         required: [true, 'category is required'],
+        uppercase: true,
         index: true
     },
     description: {
