@@ -69,6 +69,11 @@ const issueModel = new mongoose.Schema({
         default: 0,
         min: 0
     },
+    priority: {
+        type: String,
+        enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
+        default: 'LOW'
+    },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }
 });

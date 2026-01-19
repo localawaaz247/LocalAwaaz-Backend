@@ -19,7 +19,7 @@ const checkIssueUpdates = require('../utils/checkIssueUpdates');
 // ---------------------------------------------------------
 // POST: Create Issue
 // ---------------------------------------------------------
-issueRouter.post('/create/issue', userAuth, profileAuth, async (req, res) => {
+issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
     try {
         const userId = req.userId;
 
@@ -30,14 +30,34 @@ issueRouter.post('/create/issue', userAuth, profileAuth, async (req, res) => {
         // Destructure safely after validation
         const { title, category, description, location, media } = req.body;
 
-        const user = await User.findOne({ _id: userId })
+        const user = await User.findById(userId)
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not Found' });
         }
         if (!user.isVerified) {
             return res.status(400).json({ success: false, message: "Verify email before Posting" });
         }
-
+        //PRIORITY logic
+        let priority;
+        switch (category) {
+            case 'SAFETY':
+                priority = 'CRITICAL'
+                break;
+            case 'WATER':
+            case 'ELECTRICITY':
+                priority = 'HIGH'
+                break;
+            case 'ROAD':
+            case 'GARBAGE':
+                priority = 'MEDIUM'
+                break;
+            case 'OTHER':
+                priority = 'LOW'
+                break;
+            default:
+                priority = 'LOW'
+                break;
+        }
         const newIssue = await Issue.create({
             createdBy: userId,
             title: title.trim(),
@@ -54,6 +74,7 @@ issueRouter.post('/create/issue', userAuth, profileAuth, async (req, res) => {
                     coordinates: location.geoData.coordinates
                 }
             },
+            priority,
             media: media || [],
             status: "OPEN",
             statusHistory: [{
@@ -62,7 +83,7 @@ issueRouter.post('/create/issue', userAuth, profileAuth, async (req, res) => {
                 note: "Issue reported by user"
             }]
         });
-        return res.status(200).json({ success: true, message: "Your Issue has been recorded" })
+        return res.status(201).json({ success: true, message: "Your Issue has been recorded" })
     }
     catch (err) {
         return res.status(400).json({ success: false, message: err.message });
@@ -72,7 +93,7 @@ issueRouter.post('/create/issue', userAuth, profileAuth, async (req, res) => {
 // ---------------------------------------------------------
 // PATCH: Update Issue
 // ---------------------------------------------------------
-issueRouter.patch('/update/issue/:id', userAuth, profileAuth, async (req, res) => {
+issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -95,6 +116,10 @@ issueRouter.patch('/update/issue/:id', userAuth, profileAuth, async (req, res) =
         if (issue.isDeleted) {
             return res.status(400).json({ success: false, message: "The issue has been deleted" });
         }
+        const { status } = issue;
+        if (status !== "OPEN") {
+            return res.status(400).json({ success: false, message: "Issues with status 'OPEN' can be updated" })
+        }
 
         const { createdBy } = issue;
         if (userId.toString() !== createdBy.toString()) {
@@ -109,8 +134,29 @@ issueRouter.patch('/update/issue/:id', userAuth, profileAuth, async (req, res) =
         if (!isValidUpdate) {
             return res.status(400).json({ success: false, message: "Invalid field in update request" });
         }
-
-        // 3. Update Loop
+        //PRIORITY logic
+        // 3. PRIORITY LOGIC (Fixed Scope)
+        // Only recalculate if category is part of the request body
+        if (req.body.category) {
+            let newPriority;
+            switch (req.body.category) {
+                case 'SAFETY':
+                    newPriority = 'CRITICAL';
+                    break;
+                case 'WATER':
+                case 'ELECTRICITY':
+                    newPriority = 'HIGH';
+                    break;
+                case 'ROAD':
+                case 'GARBAGE':
+                    newPriority = 'MEDIUM';
+                    break;
+                default:
+                    newPriority = 'LOW';
+            }
+            issue.priority = newPriority;
+        }
+        // 4. Update Loop
         updates.forEach((field) => {
             if (field === 'title' || field === 'description') {
                 issue[field] = req.body[field].trim();
@@ -121,7 +167,6 @@ issueRouter.patch('/update/issue/:id', userAuth, profileAuth, async (req, res) =
                 issue[field] = req.body[field];
             }
         });
-
         await issue.save();
         return res.status(200).json({ success: true, message: "Issue updated successfully" });
     }
@@ -131,4 +176,74 @@ issueRouter.patch('/update/issue/:id', userAuth, profileAuth, async (req, res) =
     }
 });
 
+// DELETE: Soft delete an issue (only creator, only when OPEN)
+issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { id } = req.params;
+
+        // 1. Validate MongoDB ObjectId to prevent DB errors
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid issue id"
+            });
+        }
+
+        // 2. Fetch issue from DB (single source of truth)
+        const issue = await Issue.findById(id);
+        if (!issue) {
+            return res.status(404).json({
+                success: false,
+                message: "Issue not found"
+            });
+        }
+
+        // 3. Ensure only the creator can delete the issue
+        if (issue.createdBy.toString() !== userId.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: "Unauthorized deletion"
+            });
+        }
+
+        // 4. Prevent repeated deletion attempts
+        if (issue.isDeleted) {
+            return res.status(400).json({
+                success: false,
+                message: "Issue already deleted"
+            });
+        }
+
+        // 5. Allow deletion only when issue is still OPEN
+        // This prevents tampering after authority action
+        if (issue.status !== "OPEN") {
+            return res.status(400).json({
+                success: false,
+                message: "Only issues with status 'OPEN' can be deleted"
+            });
+        }
+
+        // 6. Soft delete:
+        // - Keep record for audit/history
+        // - Remove issue from public visibility
+        await Issue.findByIdAndUpdate(id, {
+            isDeleted: true,
+            isPublic: false
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Issue deleted successfully"
+        });
+
+    } catch (err) {
+        // Log error for debugging, do not expose internal details to client
+        console.log(err.message);
+        return res.status(500).json({
+            success: false,
+            message: "Error occurred in deletion"
+        });
+    }
+});
 module.exports = issueRouter;
