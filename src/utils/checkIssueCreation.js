@@ -17,7 +17,7 @@ const checkIssueCreation = (req) => {
     const { title, category, description, location, media } = req.body;
 
     // Define the list of allowed categories for strict validation
-    const allowedCategories = ['ROAD', 'WATER', 'ELECTRICITY', 'SAFETY', 'GARBAGE', 'OTHER'];
+    const allowedCategories = ['ROAD', 'WATER', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'OTHER'];
 
     // ============================================================
     // 1. TITLE VALIDATION

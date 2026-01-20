@@ -73,25 +73,29 @@ const issueModel = new mongoose.Schema({
             uploadedAt: { type: Date, default: Date.now }
         }
     ],
-    upVotesCount: {
-        type: Number,
-        default: 0,
-        min: 0
-    },
     priority: {
         type: String,
         enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],
         default: 'LOW'
     },
     impactScore: {
-        type: Number
+        type: Number,
+        default: 10
     },
-    reportCount: {
-        type: Number
-    },
-    isFlagged: {
-        type: Boolean
-    },
+    flags: [
+        {
+            flagReason: String,
+            flaggedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            createdAt: { type: Date, default: Date.now }
+        },
+    ],
+    flagCount: { type: Number, default: 0 },
+    shares: [
+        {
+            sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        }
+    ],
+    shareCount: { type: Number, default: 0 },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }
 });

@@ -15,6 +15,8 @@ const User = require('../models/User');
 const checkIssueCreation = require('../utils/checkIssueCreation');
 // partial validator for PATCH
 const checkIssueUpdates = require('../utils/checkIssueUpdates');
+const locationAuth = require('../middlewares/locationAuth');
+const checkIssueFlags = require('../utils/checkIssueFlags');
 
 // ---------------------------------------------------------
 // POST: Create Issue
@@ -247,50 +249,95 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
     }
 });
 
-issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, async (req, res) => {
+issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
-        const { userLng, userLat } = req.body;
+        const confirmedIssue = await Issue.findOneAndUpdate(
+            {
+                _id: id,
+                "isDeleted": false,
+                "confirmations.user": { $ne: userId }
+            },
+            {
+                $push: {
+                    confirmations: { user: userId }
+                },
+                $inc: { confirmationCount: 1 }
+            },
+            { new: true }
+        );
+        if (confirmedIssue) {
+            return res.status(200).json(
+                {
+                    success: true,
+                    message: "Issue confirmed successfully",
+                    newConfirmedCount: confirmedIssue.confirmationCount
 
-        if (!userLng || !userLat) {
-            return res.status(400).json({ success: false, message: "Your Location is required to confirm" });
+                })
         }
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: "Invalid issue ID" });
-        }
-
-        const issue = await Issue.findOne({
-            _id: id,
-            "location.geoData": {
-                $near: {
-                    $geometry: {
-                        type: "Point",
-                        coordinates: [parseFloat(userLng), parseFloat(userLat)]
-                    },
-                    $maxDistance: 1000
-                }
-            }
-        });
+        const issue = await Issue.exists({ _id: id, isDeleted: false });
         if (!issue) {
-            return res.status(400).json({ success: false, message: "You are too far away! You must be within 1km to confirm this issue" });
+            return res.status(404).json({ success: false, message: "Issue not found" });
         }
-        const alreadyConfirmed = issue.confirmations.some((conf) => {
-            return conf.user.toString() === userId.toString()
-        });
-        if (alreadyConfirmed) {
-            return res.status(400).json({ success: false, message: "You have already Confirmed the issue" });
+        else {
+            return res.status(400).json({ success: false, message: "You have already confirmed this Issue" })
         }
-        issue.confirmations.push({ user: userId });
-        issue.confirmationCount = (issue.confirmationCount || 0) + 1;
-
-        await issue.save();
-        return res.status(200).json({ success: true, message: "Issue confirmed successfully", newCount: issue.confirmationCount });
     }
     catch (err) {
         console.log(err);
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
     }
-})
+});
+
+issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { id } = req.params;
+        const flag = checkIssueFlags(req);
+        if (!flag) {
+            return res.status(400).json({ success: false, message: "Inavlid Flag reason" });
+        }
+        const updatedIssue = await Issue.findOneAndUpdate(
+            {
+                _id: id,
+                "flags.flaggedBy": { $ne: userId },
+                "isDeleted": false
+            },
+            {
+                $push: {
+                    flags: {
+                        flagReason: flag,
+                        flaggedBy: userId
+                    }
+                },
+                $inc: {
+                    flagCount: 1
+                }
+            },
+            {
+                new: true
+            }
+        )
+        if (updatedIssue) {
+            return res.status(200).json(
+                {
+                    success: true,
+                    message: "Issue flagged successfully",
+                    newFlagCount: updatedIssue.flagCount
+                });
+        }
+
+        const issueExists = await Issue.exists({ _id: id, isDeleted: false });
+        if (!issueExists) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+        return res.status(400).json({ success: false, message: "You have already flagged this Issue" })
+    } catch (err) {
+        console.log(err);
+        return res.status(500).json({ success: false, message: err.message });
+    }
+});
+
 
 module.exports = issueRouter;
