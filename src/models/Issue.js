@@ -7,6 +7,10 @@ const issueModel = new mongoose.Schema({
         ref: 'User',
         index: true
     },
+    isAnonymous: {
+        type: Boolean,
+        default: false,
+    },
     title: {
         type: String,
         trim: true,
@@ -90,11 +94,6 @@ const issueModel = new mongoose.Schema({
         },
     ],
     flagCount: { type: Number, default: 0 },
-    shares: [
-        {
-            sharedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-        }
-    ],
     shareCount: { type: Number, default: 0 },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }

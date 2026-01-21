@@ -17,6 +17,7 @@ const checkIssueCreation = require('../utils/checkIssueCreation');
 const checkIssueUpdates = require('../utils/checkIssueUpdates');
 const locationAuth = require('../middlewares/locationAuth');
 const checkIssueFlags = require('../utils/checkIssueFlags');
+const Share = require('../models/Share');
 
 // ---------------------------------------------------------
 // POST: Create Issue
@@ -30,7 +31,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         checkIssueCreation(req);
 
         // Destructure safely after validation
-        const { title, category, description, location, media } = req.body;
+        const { title, category, description, location, media, isAnonymous } = req.body;
 
         const user = await User.findById(userId)
         if (!user) {
@@ -63,6 +64,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         const newIssue = await Issue.create({
             createdBy: userId,
             title: title.trim(),
+            isAnonymous,
             // Validator already uppercased it in req.body, but being explicit is fine
             category: req.body.category,
             description: description.trim(),
@@ -248,7 +250,7 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
         });
     }
 });
-
+// CONFIRM: Confirm an issue if present within some range
 issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
@@ -289,7 +291,7 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
     }
 });
-
+//FLAG: Report the issue
 issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
@@ -338,6 +340,196 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
         return res.status(500).json({ success: false, message: err.message });
     }
 });
+
+// GET /issue/:id/share
+// Handles sharing an issue using a manual cooldown-based approach
+// issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
+//     try {
+//         // Extract authenticated user id
+//         const { userId } = req;
+
+//         // Extract issue id from route params
+//         const { id } = req.params;
+
+//         // Validate issue ObjectId early
+//         if (!mongoose.Types.ObjectId.isValid(id)) {
+//             return res.status(400).json({
+//                 success: false,
+//                 message: "Issue Invalid"
+//             });
+//         }
+
+//         // Cooldown window (in minutes) during which a user
+//         // cannot re-share the same issue
+//         const COOL_DOWN_MIN = 5;
+
+//         /**
+//          * Find existing share log for this user–issue pair
+//          * This log is used to:
+//          * - Track last share time
+//          * - Enforce cooldown manually in application logic
+//          */
+//         const log = await Share.findOne({ userId, issueId: id });
+
+//         const now = new Date();
+//         let shouldIncrement = false;
+
+//         if (log) {
+//             /**
+//              * Calculate time difference since last share
+//              * If within cooldown window, block share
+//              */
+//             const msDiff = now - new Date(log.lastSharedAt);
+//             const minutesPassed = msDiff / (60 * 1000);
+
+//             if (minutesPassed < COOL_DOWN_MIN) {
+//                 return res.status(200).json({
+//                     success: true,
+//                     message: "You have already shared this issue"
+//                 });
+//             }
+
+//             // Cooldown passed → update lastSharedAt
+//             log.lastSharedAt = now;
+//             await log.save();
+//             shouldIncrement = true;
+//         } else {
+//             /**
+//              * First-time share:
+//              * Create a new share log entry
+//              */
+//             await Share.create({
+//                 userId,
+//                 issueId: id,
+//                 lastSharedAt: now
+//             });
+//             shouldIncrement = true;
+//         }
+
+//         /**
+//          * Increment issue share count only when:
+//          * - First-time share OR
+//          * - Cooldown window has passed
+//          */
+//         if (shouldIncrement) {
+//             const updateIssue = await Issue.findOneAndUpdate(
+//                 { _id: id, isDeleted: false },
+//                 { $inc: { shareCount: 1 } },
+//                 { new: true }
+//             );
+
+//             if (!updateIssue) {
+//                 return res.status(404).json({
+//                     success: false,
+//                     message: 'Issue not found'
+//                 });
+//             }
+
+//             return res.status(200).json({
+//                 success: true,
+//                 message: "Issue shared",
+//                 shares: updateIssue.shareCount
+//             });
+//         }
+//     }
+//     catch (err) {
+//         // Log unexpected server errors
+//         console.log(err);
+
+//         return res.status(500).json({
+//             success: false,
+//             message: 'Server error: error in sharing'
+//         });
+//     }
+// });
+
+
+
+// PUT /issue/:id/share
+// Handles sharing an issue with TTL-based throttling
+
+issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
+    try {
+        // Extract authenticated userId (set by auth middleware)
+        const { userId } = req;
+
+        // Extract issue id from route params
+        const { id } = req.params;
+
+        // Validate MongoDB ObjectId early to avoid unnecessary DB calls
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid Issue"
+            });
+        }
+
+        /**
+         * Attempt to create a share log entry.
+         * - This collection has:
+         *   1) TTL index (auto-expiry after cooldown)
+         *   2) Unique compound index (userId + issueId)
+         *
+         * If the user already shared within the TTL window,
+         * MongoDB throws E11000 (duplicate key error).
+         */
+        await Share.create({ userId, issueId: id });
+
+        /**
+         * Increment share count only if share log creation succeeds.
+         * This ensures:
+         * - Accurate shareCount
+         * - No double counting during cooldown
+         *
+         * Using findOneAndUpdate keeps this operation atomic.
+         */
+        const issue = await Issue.findOneAndUpdate(
+            { _id: id, isDeleted: false },
+            { $inc: { shareCount: 1 } },
+            { new: true }
+        );
+
+        // If issue does not exist or is soft-deleted
+        if (!issue) {
+            return res.status(404).json({
+                success: false,
+                message: "Issue not found"
+            });
+        }
+
+        // Successful share
+        return res.status(200).json({
+            success: true,
+            message: "Issue shared",
+            shares: issue.shareCount
+        });
+    }
+    catch (err) {
+        /**
+         * Duplicate key error (E11000) occurs when:
+         * - The same user tries to share the same issue
+         * - Within the TTL cooldown window
+         *
+         * Treated as a throttled but successful request
+         */
+        if (err.code === 11000) {
+            return res.status(200).json({
+                success: true,
+                message: "You have already shared this issue"
+            });
+        }
+
+        // Log unexpected errors for debugging
+        console.error(err);
+
+        // Generic server error response
+        return res.status(500).json({
+            success: false,
+            message: "Server error while sharing"
+        });
+    }
+});
+
 
 
 module.exports = issueRouter;
