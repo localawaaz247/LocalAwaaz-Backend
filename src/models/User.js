@@ -31,8 +31,7 @@ const userSchema = new mongoose.Schema({
         type: String,
         trim: true,
         unique: [true, "UserName already exists"],
-        sparse: true,
-        lowercase: true
+        sparse: true
     },
 
     /**

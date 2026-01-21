@@ -52,10 +52,6 @@ const issueModel = new mongoose.Schema({
             confirmedAt: { type: Date, default: Date.now }
         }
     ],
-    confirmationCount: {
-        type: Number,
-        default: 0
-    },
     status: {
         type: String,
         enum: ["OPEN", "IN_REVIEW", "RESOLVED", "REJECTED"],
@@ -95,6 +91,7 @@ const issueModel = new mongoose.Schema({
     ],
     flagCount: { type: Number, default: 0 },
     shareCount: { type: Number, default: 0 },
+    confirmationCount: { type: Number, default: 0 },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }
 });

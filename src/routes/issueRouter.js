@@ -18,6 +18,7 @@ const checkIssueUpdates = require('../utils/checkIssueUpdates');
 const locationAuth = require('../middlewares/locationAuth');
 const checkIssueFlags = require('../utils/checkIssueFlags');
 const Share = require('../models/Share');
+const calculateImpactScore = require('../utils/impactScore');
 
 // ---------------------------------------------------------
 // POST: Create Issue
@@ -250,6 +251,7 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
         });
     }
 });
+
 // CONFIRM: Confirm an issue if present within some range
 issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
@@ -291,55 +293,73 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
     }
 });
-//FLAG: Report the issue
+
+// POST endpoint to flag an issue for a specific reason
 issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
-        const { userId } = req;
-        const { id } = req.params;
-        const flag = checkIssueFlags(req);
+        const { userId } = req;          // Authenticated user's ID
+        const { id } = req.params;       // Issue ID from URL
+        const flag = checkIssueFlags(req); // Validate/check the flag reason from request
         if (!flag) {
-            return res.status(400).json({ success: false, message: "Inavlid Flag reason" });
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Flag reason" // Reject invalid or unrecognized flags
+            });
         }
+
+        // Attempt to flag the issue only if:
+        // 1) User hasn't flagged it before
+        // 2) Issue exists and is not deleted
         const updatedIssue = await Issue.findOneAndUpdate(
             {
                 _id: id,
-                "flags.flaggedBy": { $ne: userId },
-                "isDeleted": false
+                "flags.flaggedBy": { $ne: userId }, // Prevent duplicate flags by same user
+                isDeleted: false
             },
             {
                 $push: {
                     flags: {
-                        flagReason: flag,
-                        flaggedBy: userId
+                        flagReason: flag,  // Add the flag reason
+                        flaggedBy: userId  // Record who flagged it
                     }
                 },
                 $inc: {
-                    flagCount: 1
+                    flagCount: 1          // Increment the total flag count
                 }
             },
             {
-                new: true
+                new: true // Return the updated document
             }
-        )
+        );
+
+        // If flagging was successful, return success with new flag count
         if (updatedIssue) {
-            return res.status(200).json(
-                {
-                    success: true,
-                    message: "Issue flagged successfully",
-                    newFlagCount: updatedIssue.flagCount
-                });
+            return res.status(200).json({
+                success: true,
+                message: "Issue flagged successfully",
+                newFlagCount: updatedIssue.flagCount
+            });
         }
 
+        // If update failed, check if issue exists at all
         const issueExists = await Issue.exists({ _id: id, isDeleted: false });
         if (!issueExists) {
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
-        return res.status(400).json({ success: false, message: "You have already flagged this Issue" })
+
+        // Otherwise, user has already flagged this issue
+        return res.status(400).json({ 
+            success: false, 
+            message: "You have already flagged this Issue" 
+        });
+
     } catch (err) {
+        // Log any errors and return 500 server error
         console.log(err);
         return res.status(500).json({ success: false, message: err.message });
     }
 });
+
 
 // GET /issue/:id/share
 // Handles sharing an issue using a manual cooldown-based approach
@@ -530,6 +550,48 @@ issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
     }
 });
 
+// GET endpoint to fetch the impact score of a specific issue
+issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;        // Extract authenticated user's ID from the middleware
+        const { id } = req.params;     // Get the issue ID from the URL parameters
+
+        // Validate the issue ID format
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ 
+                success: false, 
+                message: "Invalid Issue"  // Respond if ID is not a valid Mongo ObjectId
+            });
+        }
+
+        // Find the issue in the database, ensure it's not deleted
+        const issue = await Issue.findOne({ _id: id, isDeleted: false });
+        if (!issue) {
+            return res.status(404).json({ 
+                success: false, 
+                message: "Issue not found"  // Respond if no matching issue exists
+            });
+        }
+
+        // Calculate the impact score using the utility function
+        const impactScore = calculateImpactScore(issue);
+
+        // Send back the score in a success response
+        return res.status(200).json({
+            success: true,
+            message: "Impact score retrieved successfully",
+            impactScore: impactScore
+        });
+
+    } catch (err) {
+        // Log any server errors and respond with 500
+        console.log(err);
+        return res.status(500).json({ 
+            success: false, 
+            message: "Server error in getting impact score" 
+        });
+    }
+});
 
 
 module.exports = issueRouter;
