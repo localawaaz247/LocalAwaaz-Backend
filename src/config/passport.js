@@ -67,7 +67,8 @@ passport.use(
                             contact: { email },
                             googleId: profile.id,
                             profilePic: profile.photos?.[0]?.value,
-                            isVerified: true,
+                            isEmailVerified: true,
+                            civilScore: 10,
                             isProfileComplete: false,
                         });
                     }

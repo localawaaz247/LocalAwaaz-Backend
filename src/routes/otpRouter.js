@@ -21,125 +21,62 @@ const otpRouter = express.Router();
 otpRouter.post('/otp/request', async (req, res) => {
     try {
         const { email, userName } = req.body;
-
+        if (!userName || userName.trim().length < 4) {
+            return res.status(400).json({
+                success: false,
+                message: "Valid UserName is required to start verification"
+            });
+        }
         // Basic email validation
         if (!email || !validate.isEmail(email)) {
             return res.status(400).json({
                 success: false,
-                message: "Enter Valid email id"
+                message: "Enter valid email id"
             });
         }
-
-        let user = null;
-
-        /**
-         * ----------------------------
-         * INSIDE-APP VERIFICATION FLOW
-         * ----------------------------
-         * If userName is provided, OTP is being requested
-         * by an already existing user from within the app.
-         */
-        if (userName) {
-            user = await User.findOne({ userName });
-
-            // Username must exist
-            if (!user) {
-                return res.status(400).json({
-                    success: false,
-                    message: "User does not exists"
-                });
-            }
-
-            /**
-             * If user already has an email stored,
-             * the requested email MUST match it.
-             * Prevents changing email silently via OTP.
-             */
-            if (user?.contact?.email && user?.contact?.email !== email) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Email does not match the user"
-                });
-            }
-        }
-
-        /**
-         * ---------------------------------
-         * EMAIL HIJACK PREVENTION
-         * ---------------------------------
-         * If this email already belongs to some OTHER account,
-         * do NOT allow OTP request for a different username.
-         */
-        let existingEmailUser = await User.findOne({ "contact.email": email });
-        if (existingEmailUser && existingEmailUser.userName !== userName) {
-            return res.status(400).json({
+        const userNameExists = await User.findOne({ userName });
+        if (userNameExists) {
+            return res.status(409).json({
                 success: false,
-                message: "Email is already in use by another account"
+                message: "UserName already taken. Choose another."
             });
         }
-
-        /**
-         * ---------------------------------
-         * OTP THROTTLING & BLOCKING
-         * ---------------------------------
-         * Prevent OTP spamming by tracking attempts
-         * and blocking requests temporarily.
-         */
+        const emailExists = await User.findOne({ "contact.email": email });
+        if (emailExists) {
+            return res.status(409).json({
+                success: false,
+                message: "Email already registered. Please login."
+            });
+        }
         const otpRecord = await OtpModel.findOne({ email });
-
-        // If blocked, reject immediately
         if (otpRecord?.blockUntil && otpRecord.blockUntil > Date.now()) {
             return res.status(429).json({
                 success: false,
-                message: "Too many requests. Try again later"
+                message: "Too many attempts. Try again later."
             });
         }
-
-        // Increment attempts count
-        const attempts = (otpRecord?.attempts || 0) + 1;
-
-        // Block user for 5 minutes after 5 attempts
-        const blockUntil = attempts > 5
-            ? new Date(Date.now() + 5 * 60 * 1000)
-            : null;
-
-        /**
-         * ---------------------------------
-         * OTP GENERATION & STORAGE
-         * ---------------------------------
-         */
         const generatedOtp = Math.floor(100000 + Math.random() * 900000).toString();
         const hashedOtp = await bcrypt.hash(generatedOtp, 10);
 
-        // Send OTP email
+        const attempts = (otpRecord?.attempts || 0) + 1;
+        const blockUntil = attempts > 5 ? new Date(Date.now() + 5 * 60 * 1000) : null;
         await sendMail({ email, generatedOtp });
-
-        const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-        /**
-         * UPSERT is critical here:
-         * - avoids duplicate key errors
-         * - updates OTP if already exists
-         * - preserves username if already linked
-         */
         await OtpModel.findOneAndUpdate(
             { email },
             {
                 email,
+                userName: userName, // <--- BINDING HAPPENS HERE
                 otp: hashedOtp,
-                userName: userName || otpRecord?.userName || null,
                 attempts,
-                lastSent: new Date(),
                 blockUntil,
-                expiresAt,
+                expiresAt: new Date(Date.now() + 10 * 60 * 1000),
                 isVerified: false
             },
             { upsert: true, new: true }
         );
-
         res.status(200).json({
             success: true,
-            message: "OTP sent on email id"
+            message: `OTP sent to ${email}`
         });
 
     } catch (err) {
@@ -164,37 +101,46 @@ otpRouter.post('/otp/verify', async (req, res) => {
     try {
         const { email, otp, userName } = req.body;
 
-        if (!email || !otp) {
+        if (!email || !otp || !userName) {
             return res.status(400).json({
-                message: 'Email and OTP required'
+                message: 'Email, OTP, and userName is required'
             });
         }
-
-        // Throws error if OTP is invalid or expired
-        await verifyOtp(email, otp);
-
-        /**
-         * If username is provided,
-         * this is an inside-app verification.
-         * Mark user as verified and attach email.
-         */
-        if (userName) {
-            const userRecord = await OtpModel.findOne({ email, userName });
-
-            if (userRecord) {
-                const user = await User.findOne({ userName });
-                user.isVerified = true;
-                user.contact.email = email;
-                await user.save();
-            }
+        const otpRecord = await OtpModel.findOne({ email });
+        if (!otpRecord) {
+            return res.status(400).json({
+                success: false,
+                message: "OTP request not found. Please request a new OTP."
+            });
+        };
+        if (otpRecord.userName !== userName) {
+            return res.status(400).json({
+                success: false,
+                message: "This email verification belongs to a different username."
+            });
         }
-
+        if (otpRecord.expiresAt < Date.now()) {
+            return res.status(400).json({
+                success: false,
+                message: "OTP has expired. Please request a new one."
+            });
+        }
+        const isValid = await bcrypt.compare(otp, otpRecord.otp);
+        if (!isValid) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid OTP"
+            });
+        }
+        otpRecord.isVerified = true;
+        otpRecord.otp = null;
+        await otpRecord.save();
         res.status(200).json({
             success: true,
-            message: 'OTP verified successfully'
+            message: 'Email verified successfully!'
         });
-
     } catch (err) {
+        console.log(err)
         res.status(400).json({
             success: false,
             message: err.message

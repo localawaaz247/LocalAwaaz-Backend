@@ -76,11 +76,14 @@ const userSchema = new mongoose.Schema({
     /**
      * Email verification status
      */
-    isVerified: {
+    isEmailVerified: {
         type: Boolean,
         default: false
     },
-
+    civilScore: {
+        type: Number,
+        default: 10
+    },
     /**
      * ----------------------------
      * CONTACT INFORMATION
@@ -101,7 +104,7 @@ const userSchema = new mongoose.Schema({
             type: String,
             default: null,
             trim: true,
-            sparse: true,
+            required: [true, 'Email id is required'],
             unique: [true, "Email already exists"],
             lowercase: true
         },

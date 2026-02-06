@@ -136,6 +136,7 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
         if (!lng || !lat) {
             return res.status(400).json({ success: false, message: "User location required" });
         }
+        const { userId } = req
         const userLng = parseFloat(lng);
         const userLat = parseFloat(lat);
         const issues = await Issue.aggregate([
@@ -145,7 +146,10 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
                     distanceField: "distance",
                     maxDistance: 100000,
                     spherical: true,
-                    query: { isDeleted: false }
+                    query: {
+                        isDeleted: false,
+                        userId: { $ne: userId }
+                    }
                 }
             }
         ]);
@@ -157,5 +161,31 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
     }
 })
 
+userRouter.get('/profile', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const user = await User.findById(userId).select("-password");
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User profile not found" });
+        }
+        return res.status(200).json(
+            {
+                success: true,
+                message: "User Profile sent successfully",
+                data: user
+            }
+        )
+    }
+    catch (err) {
+        console.log("Profile error : ", err);
+        return res.status(500).json({ success: false, message: "Error in fetching profile" });
+    }
 
+})
+
+userRouter.patch('/profile/update', userAuth, profileAuth, async (req, res) => {
+    const { name, password, profilePic, country, state, city, pinCode } = req.body;
+    checkUserUpdates(req);
+
+})
 module.exports = userRouter;

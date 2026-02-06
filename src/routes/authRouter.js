@@ -14,14 +14,16 @@ const authRouter = express.Router();
 
 /**
  * ============================
- * USER REGISTRATION (LOCAL)
+ * USER REGISTRATION (SECURE)
  * ============================
- * Handles:
- * 1. Input validation
- * 2. Uniqueness checks
- * 3. Password hashing
- * 4. Profile creation
- * 5. Auto-verification if OTP already verified
+ * Final step of the 2-Step Signup Process.
+ * * Flow:
+ * 1. Validate Form Data
+ * 2. Check for Duplicates (User/Email)
+ * 3. SECURITY GATE: Verify that email was pre-verified via OTP API.
+ * 4. STRICT BINDING: Ensure the verification session matches the Username.
+ * 5. Create User (Initialized as Verified + 10 CivilScore).
+ * 6. Cleanup Temporary OTP Data.
  */
 authRouter.post('/auth/register', async (req, res) => {
     try {
@@ -37,46 +39,78 @@ authRouter.post('/auth/register', async (req, res) => {
             pinCode
         } = req.body;
 
-        // Validate request body structure and required fields
+        // 1. Validate Request Structure (Data Integrity)
         validateSignUpData(req);
 
-        // Ensure username/email uniqueness
+        // 2. Uniqueness Check (User & Email)
+        // Ensures we don't try to create duplicates before doing expensive DB ops
         await checkUniqueness(req);
 
         const role = 'user';
         const hashedPassword = await bcrypt.hash(password, 10);
         const isProfileComplete = true;
 
-        // Create new user with contact info
+        /**
+         * ---------------------------------
+         * 3. COMPULSORY VERIFICATION GATE
+         * ---------------------------------
+         * Query the temporary OTP collection.
+         * The user MUST have verified their email in Step 1 (Frontend).
+         */
+        const otpRecord = await OtpModel.findOne({ email });
+
+        // Gate 1: Check if verification record exists and is marked true
+        if (!otpRecord || !otpRecord.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: "Email is not verified"
+            });
+        }
+
+        /**
+         * ---------------------------------
+         * 4. STRICT BINDING CHECK (Anti-Hijack)
+         * ---------------------------------
+         * Security Rule: The 'userName' stored during OTP verification
+         * MUST match the 'userName' being registered now.
+         * * Prevents User A from verifying an email, but then 
+         * using that valid session to register User B (Account Hijacking).
+         */
+        if (otpRecord.userName !== userName) {
+            return res.status(400).json({
+                success: false,
+                message: "Security Mismatch: The verified email is bound to a different username."
+            });
+        }
+
+        // 5. Create User Document
+        // We safely set isEmailVerified: true because of the checks above.
         const user = await User.create({
+            // Root Fields
             userName,
             password: hashedPassword,
             role,
             name,
+            gender,
             isProfileComplete,
+
+            // Initialization Checks
+            isEmailVerified: true,  // Immediately active
+            civilScore: 10,         // Gamification: Start with 'Citizen' rank points
+
+            // Nested Contact Info
             contact: {
                 email,
-                gender,
                 country,
                 state,
                 city,
-                pinCode,
-                isProfileComplete
+                pinCode
             }
         });
 
-        /**
-         * ---------------------------------
-         * AUTO EMAIL VERIFICATION
-         * ---------------------------------
-         * If OTP was already verified before signup,
-         * directly mark user as verified.
-         */
-        const otpRecord = await OtpModel.findOne({ email, isVerified: true });
-        if (otpRecord) {
-            user.isVerified = true;
-            await user.save();
-        }
+        // 6. Cleanup
+        // Delete the temporary OTP record as it is no longer needed
+        await OtpModel.deleteOne({ email });
 
         res.status(200).json({
             success: true,
@@ -84,7 +118,7 @@ authRouter.post('/auth/register', async (req, res) => {
         });
 
     } catch (err) {
-        console.log(err);
+        console.error("Signup Error:", err);
         res.status(400).json({
             success: false,
             message: err.message
@@ -307,6 +341,7 @@ authRouter.get(
          * with access token.
          */
         const accessToken = generateAccessToken(req.user._id);
+        
         if (!req.user.isProfileComplete) {
             return res.redirect(
                 `${process.env.FRONTEND_URL}/complete-profile?token=${accessToken}`
@@ -314,7 +349,7 @@ authRouter.get(
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}/homepage?token=${accessToken}`);
+        res.redirect(`${process.env.FRONTEND_URL}/dashboard?token=${accessToken}`);
     }
 );
 

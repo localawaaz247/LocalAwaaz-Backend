@@ -28,8 +28,11 @@ const validateLocalSignupData = (req) => {
     if (gender && !allowedGender.includes(gender)) {
         throw new Error('Enter valid Gender : male, female, other')
     }
+    if (!email) {
+        throw new Error('Email id is required');
+    }
     if (email && !validate.isEmail(email)) {
-        throw new Error('Email is not valid');
+        throw new Error('Email id is not valid');
     }
     if (profilePic && !validate.isURL(profilePic)) {
         throw new Error('Select valid Profile Picture');
@@ -49,7 +52,7 @@ const validateLocalSignupData = (req) => {
     if (!pinCode) {
         throw new Error('Enter PinCode');
     }
-    if (!validate.isPostalCode(pinCode, 'any')) {
+    if (!validate.isPostalCode(pinCode.toString(), 'IN')) {
         throw new Error('Enter Valid PinCode');
     }
     return true;

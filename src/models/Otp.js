@@ -22,15 +22,8 @@ const OtpSchema = new mongoose.Schema({
         unique: [true, "OTP already sent to this email"]
     },
 
-    /**
-     * Optional username:
-     * - Only set when OTP is for a logged-in user
-     * - Sparse index allows null values
-     */
     userName: {
-        type: String,
-        default: null,
-        sparse: true
+        type: String
     },
 
     /**
@@ -39,8 +32,7 @@ const OtpSchema = new mongoose.Schema({
      * - Required
      */
     otp: {
-        type: String,
-        required: true
+        type: String
     },
 
     /**
