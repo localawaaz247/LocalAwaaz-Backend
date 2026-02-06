@@ -16,7 +16,8 @@ const checkIssueUpdates = (req) => {
     const { title, category, description, location, media } = req.body;
 
     // List of allowed values for the 'category' field
-    const allowedCategories = ['ROAD', 'WATER', 'ELECTRICITY', 'SAFETY', 'GARBAGE', 'OTHER'];
+    const allowedCategories = ['SAFETY', 'WATER_SUPPLY', 'ELECTRICITY', 'SANITATION',
+        'ROAD_&_POTHOLES', 'GARBAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT'];
 
     // ============================================================
     // 1. TITLE VALIDATION
@@ -30,8 +31,8 @@ const checkIssueUpdates = (req) => {
 
         // Split by spaces to count words. Max limit: 5 words.
         const titleWordCount = title.trim().split(/\s+/).length;
-        if (titleWordCount > 5) {
-            throw new Error("Title must be within 5 words");
+        if (titleWordCount > 10) {
+            throw new Error("Title must be within 10 words");
         }
     }
 
@@ -73,11 +74,9 @@ const checkIssueUpdates = (req) => {
     // 4. LOCATION VALIDATION
     // ============================================================
     if (location !== undefined) {
-        // Deep Validation: If location is provided, it MUST be complete.
-        // We cannot allow partial updates like just changing "city" without "state".
-
-        if (!location.state || !location.city || !location.pincode) {
-            throw new Error('State, City and Pincode are required for location update');
+        // We only check address and geoData because that's what the Schema has.
+        if (location.address && typeof location.address !== 'string') {
+            throw new Error('Address must be a string');
         }
 
         // Ensure nested GeoJSON structure exists

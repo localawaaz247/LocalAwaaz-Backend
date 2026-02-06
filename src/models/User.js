@@ -72,7 +72,10 @@ const userSchema = new mongoose.Schema({
     profilePic: {
         type: String
     },
-
+    bio: {
+        type: String,
+        default: 'Active Citizen'
+    },
     /**
      * Email verification status
      */
@@ -83,6 +86,22 @@ const userSchema = new mongoose.Schema({
     civilScore: {
         type: Number,
         default: 10
+    },
+    issuesReported: {
+        type: Number,
+        default: 0
+    },
+    issuesResolved: {
+        type: Number,
+        default: 0
+    },
+    issuesConfirmed: {
+        type: Number,
+        default: 0
+    },
+    issuesFlagged: {
+        type: Number,
+        default: 0
     },
     /**
      * ----------------------------

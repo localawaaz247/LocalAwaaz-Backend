@@ -17,7 +17,9 @@ const checkIssueCreation = (req) => {
     const { title, category, description, location, media } = req.body;
 
     // Define the list of allowed categories for strict validation
-    const allowedCategories = ['ROAD', 'WATER', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'OTHER'];
+    const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'GARBAGE'
+        , 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT'
+    ];
 
     // ============================================================
     // 1. TITLE VALIDATION
@@ -30,8 +32,8 @@ const checkIssueCreation = (req) => {
     // Word Count Rule: Title should be short and concise (Max 5 words)
     // We split by spaces (/\s+/) to count actual words, not just characters.
     const titleWordCount = title.trim().split(/\s+/).length;
-    if (titleWordCount > 5) {
-        throw new Error("Title must be within 5 words");
+    if (titleWordCount > 10) {
+        throw new Error("Title must be within 10 words");
     }
 
     // ============================================================
@@ -74,11 +76,6 @@ const checkIssueCreation = (req) => {
     // Ensure the main location object exists
     if (!location) {
         throw new Error('Location is required');
-    }
-
-    // Check for required address fields (State, City, Pincode)
-    if (!location.state || !location.city || !location.pincode) {
-        throw new Error('State, City and Pincode are required');
     }
 
     // Check for GeoJSON structure (Used for map plotting)

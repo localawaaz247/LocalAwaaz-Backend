@@ -38,7 +38,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         if (!user) {
             return res.status(404).json({ success: false, message: 'User not Found' });
         }
-        if (!user.isVerified) {
+        if (!user.isEmailVerified) {
             return res.status(400).json({ success: false, message: "Verify email before Posting" });
         }
         //PRIORITY logic
@@ -47,38 +47,39 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             case 'SAFETY':
                 priority = 'CRITICAL'
                 break;
-            case 'WATER':
+            case 'WATER_SUPPLY':
             case 'ELECTRICITY':
+            case 'SANITATION':
                 priority = 'HIGH'
                 break;
-            case 'ROAD':
+            case 'ROAD_&_POTHOLES':
             case 'GARBAGE':
+            case 'STREET_LIGHTS':
+            case 'TRAFFIC':
                 priority = 'MEDIUM'
                 break;
-            case 'OTHER':
+            case 'ENCROACHMENT':
                 priority = 'LOW'
                 break;
             default:
                 priority = 'LOW'
                 break;
         }
+        const issueLocation = {
+            address: location?.address || 'Anonymous location',
+            geoData: {
+                type: 'Point',
+                coordinates: location.geoData?.coordinates
+            }
+        }
         const newIssue = await Issue.create({
-            createdBy: userId,
+            reportedBy: userId,
             title: title.trim(),
             isAnonymous,
             // Validator already uppercased it in req.body, but being explicit is fine
             category: req.body.category,
             description: description.trim(),
-            location: {
-                country: location.country || "India",
-                state: location.state,
-                city: location.city,
-                pincode: location.pincode,
-                geoData: {
-                    type: "Point",
-                    coordinates: location.geoData.coordinates
-                }
-            },
+            location: issueLocation,
             priority,
             media: media || [],
             status: "OPEN",
@@ -87,6 +88,9 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
                 changedBy: userId,
                 note: "Issue reported by user"
             }]
+        });
+        await User.findByIdAndUpdate(userId, {
+            $inc: { issuesReported: 1, civilScore: 20 }
         });
         return res.status(201).json({ success: true, message: "Your Issue has been recorded" })
     }
@@ -126,8 +130,8 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: "Issues with status 'OPEN' can be updated" })
         }
 
-        const { createdBy } = issue;
-        if (userId.toString() !== createdBy.toString()) {
+        const { reportedBy } = issue;
+        if (userId.toString() !== reportedBy.toString()) {
             return res.status(403).json({ success: false, message: 'You are not authorized to update' });
         }
 
@@ -143,27 +147,49 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         // 3. PRIORITY LOGIC (Fixed Scope)
         // Only recalculate if category is part of the request body
         if (req.body.category) {
+            const upperCat = req.body.category.toUpperCase();
+
+            // NOTE: These cases must match your 'Create Issue' logic EXACTLY
             let newPriority;
-            switch (req.body.category) {
+            switch (upperCat) {
                 case 'SAFETY':
                     newPriority = 'CRITICAL';
                     break;
-                case 'WATER':
+                case 'WATER_SUPPLY':
                 case 'ELECTRICITY':
+                case 'SANITATION':
                     newPriority = 'HIGH';
                     break;
-                case 'ROAD':
+                case 'ROAD_&_POTHOLES':
                 case 'GARBAGE':
+                case 'STREET_LIGHTS':
+                case 'TRAFFIC':
                     newPriority = 'MEDIUM';
                     break;
+                case 'ENCROACHMENT':
                 default:
                     newPriority = 'LOW';
+                    break;
             }
             issue.priority = newPriority;
+            issue.category = upperCat; // Ensure we save the uppercase version
         }
         // 4. Update Loop
         updates.forEach((field) => {
-            if (field === 'title' || field === 'description') {
+            if (field === 'category') return;
+            else if (field === 'location') {
+                const newLoc = req.body.location;
+                if (newLoc.address) {
+                    issue.location.address = newLoc.address;
+                }
+                if (newLoc.geoData && newLoc.geoData.coordinates) {
+                    issue.location.geoData = {
+                        type: 'Point',
+                        coordinates: newLoc.geoData.coordinates
+                    };
+                }
+            }
+            else if (field === 'title' || field === 'description') {
                 issue[field] = req.body[field].trim();
             }
             // Note: 'category' is handled by the default 'else' block 
@@ -205,7 +231,7 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
         }
 
         // 3. Ensure only the creator can delete the issue
-        if (issue.createdBy.toString() !== userId.toString()) {
+        if (issue.reportedBy.toString() !== userId.toString()) {
             return res.status(403).json({
                 success: false,
                 message: "Unauthorized deletion"
@@ -272,6 +298,12 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
             { new: true }
         );
         if (confirmedIssue) {
+            await User.findByIdAndUpdate(userId, {
+                $inc: {
+                    civilScore: 5,
+                    issuesConfirmed: 1
+                }
+            });
             return res.status(200).json(
                 {
                     success: true,
@@ -301,8 +333,8 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
         const { id } = req.params;       // Issue ID from URL
         const flag = checkIssueFlags(req); // Validate/check the flag reason from request
         if (!flag) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 message: "Invalid Flag reason" // Reject invalid or unrecognized flags
             });
         }
@@ -334,6 +366,12 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
 
         // If flagging was successful, return success with new flag count
         if (updatedIssue) {
+            await User.findByIdAndUpdate(userId, {
+                $inc: {
+                    civilScore: 2,
+                    issuesFlagged: 1
+                }
+            })
             return res.status(200).json({
                 success: true,
                 message: "Issue flagged successfully",
@@ -348,9 +386,9 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
         }
 
         // Otherwise, user has already flagged this issue
-        return res.status(400).json({ 
-            success: false, 
-            message: "You have already flagged this Issue" 
+        return res.status(400).json({
+            success: false,
+            message: "You have already flagged this Issue"
         });
 
     } catch (err) {
@@ -558,8 +596,8 @@ issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, re
 
         // Validate the issue ID format
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 message: "Invalid Issue"  // Respond if ID is not a valid Mongo ObjectId
             });
         }
@@ -567,8 +605,8 @@ issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, re
         // Find the issue in the database, ensure it's not deleted
         const issue = await Issue.findOne({ _id: id, isDeleted: false });
         if (!issue) {
-            return res.status(404).json({ 
-                success: false, 
+            return res.status(404).json({
+                success: false,
                 message: "Issue not found"  // Respond if no matching issue exists
             });
         }
@@ -586,9 +624,9 @@ issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, re
     } catch (err) {
         // Log any server errors and respond with 500
         console.log(err);
-        return res.status(500).json({ 
-            success: false, 
-            message: "Server error in getting impact score" 
+        return res.status(500).json({
+            success: false,
+            message: "Server error in getting impact score"
         });
     }
 });

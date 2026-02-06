@@ -1,7 +1,7 @@
 const mongoose = require('mongoose');
 
 const issueModel = new mongoose.Schema({
-    createdBy: {
+    reportedBy: {
         type: mongoose.Schema.Types.ObjectId,
         required: [true, "userid is required"],
         ref: 'User',
@@ -28,11 +28,10 @@ const issueModel = new mongoose.Schema({
         required: [true, 'description is required']
     },
     location: {
-        country: { type: String, default: "India" },
-        state: String,
-        city: String,
-        pincode: String,
-
+        address: {
+            type: String,
+            default: 'Anonymous location',
+        },
         //2d sphere indexing
         geoData: {
             type: {
