@@ -12,7 +12,7 @@ const locationAuth = async (req, res, next) => {
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Issue id Invalid" });
         }
-        const radiusInKm = 1;
+        const radiusInKm = 3;
         const radiusInRadians = radiusInKm / 6371;
         const issue = await Issue.findOne({
             _id: id,

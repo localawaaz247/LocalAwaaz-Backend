@@ -151,7 +151,7 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
                 $geoNear: {
                     near: { type: "Point", coordinates: [userLng, userLat] },
                     distanceField: "distance",
-                    maxDistance: 100000,
+                    maxDistance: 3000,
                     spherical: true,
                     query: {
                         isDeleted: false,

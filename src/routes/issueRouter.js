@@ -67,9 +67,12 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         }
         const issueLocation = {
             address: location?.address || 'Anonymous location',
+            city: location?.city,
+            pinCode: location?.pinCode,
+            state: location?.state,
             geoData: {
                 type: 'Point',
-                coordinates: location.geoData?.coordinates
+                coordinates: location?.geoData?.coordinates
             }
         }
         const newIssue = await Issue.create({
@@ -98,7 +101,30 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         return res.status(400).json({ success: false, message: err.message });
     }
 });
-
+//GET issues according to City and Pincode
+issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { search } = req.query;
+        if (!search) return res.status(400).json({ success: false, message: "Search term required" });
+        const searchTerm = search.trim();
+        const query = {
+            $or: [
+                { 'location.city': { $regex: searchTerm, $options: 'i' } },
+                { 'location.pinCode': searchTerm }
+            ]
+        }
+        const issues = await Issue.find(query);
+        return res.status(200).json({
+            success: true,
+            issueCount: issues.length,
+            data: issues
+        })
+    }
+    catch (err) {
+        console.log('Search Error', err);
+        return res.status(500).json({ success: false, message: 'Server Error in Searching' });
+    }
+})
 // ---------------------------------------------------------
 // PATCH: Update Issue
 // ---------------------------------------------------------
@@ -177,11 +203,16 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         // 4. Update Loop
         updates.forEach((field) => {
             if (field === 'category') return;
-            else if (field === 'location') {
+            if (field === 'location') {
                 const newLoc = req.body.location;
+                if (!issue.location) issue.location = {};
                 if (newLoc.address) {
-                    issue.location.address = newLoc.address;
+                    issue.location.address = newLoc?.address;
                 }
+                if (newLoc.city) issue.location.city = newLoc?.city;
+                if (newLoc.pinCode) issue.location.pinCode = newLoc?.pinCode;
+                if (newLoc.state) issue.location.state = newLoc?.state;
+
                 if (newLoc.geoData && newLoc.geoData.coordinates) {
                     issue.location.geoData = {
                         type: 'Point',
@@ -630,6 +661,7 @@ issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, re
         });
     }
 });
+
 
 
 module.exports = issueRouter;

@@ -32,6 +32,22 @@ const issueModel = new mongoose.Schema({
             type: String,
             default: 'Anonymous location',
         },
+        city: {
+            type: String,
+            trim: true,
+            required: [true, 'City is required'],
+            index: true
+        },
+        pinCode: {
+            type: String,
+            trim: true,
+            required: [true, 'Pincode is required'],
+            index: true
+        },
+        state: {
+            type: String,
+            trim: true
+        },
         //2d sphere indexing
         geoData: {
             type: {
@@ -97,6 +113,9 @@ const issueModel = new mongoose.Schema({
 
 //Essential GeoSpatial Index
 issueModel.index({ 'location.geoData': '2dsphere' });
+// Optimized for finding issues by status within a city (e.g., "Open issues in Mumbai")
+issueModel.index({ 'location.city': 1, status: 1 });
+issueModel.index({ 'location.pinCode': 1, status: 1 });
 
 const Issue = mongoose.model('Issue', issueModel);
 
