@@ -6,6 +6,7 @@ const validate = require('validator');
 const Issue = require("../models/Issue");
 const profileAuth = require("../middlewares/profileAuth");
 const mongoose = require('mongoose')
+const bcrypt = require('bcrypt')
 
 /**
  * ============================
@@ -247,7 +248,7 @@ userRouter.patch('/profile/edit', userAuth, profileAuth, async (req, res) => {
 
         // 1. Explicit Destructuring (Security)
         // Only extract the fields we allow users to change.
-        const { name, profilePic, gender, bio, address } = req.body;
+        const { name, profilePic, gender, bio, address, password } = req.body;
 
         const updates = {};
 
@@ -290,7 +291,21 @@ userRouter.patch('/profile/edit', userAuth, profileAuth, async (req, res) => {
             if (address.country) updates['contact.country'] = address.country;
             if (address.pinCode) updates['contact.pinCode'] = address.pinCode;
         }
-
+        //Password Update
+        if (password) {
+            const passwordOptions = {
+                minLength: 8,
+                minLowercase: 1,
+                minUppercase: 1,
+                minNumbers: 1,
+                minSymbols: 1
+            };
+            if (!validate.isStrongPassword(password, passwordOptions)) {
+                return res.status(400).json({ success: false, message: "Password must be 8+ chars and include uppercase, lowercase, number, and symbol." });
+            }
+            const hashedPass = await bcrypt.hash(password, 10);
+            updates.password = hashedPass;
+        }
         // 3. Database Update
         // { new: true } returns the updated document
         // .select("-password") ensures we don't send back the hash
