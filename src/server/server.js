@@ -11,6 +11,7 @@ const session = require("express-session");
 const passport = require("../config/passport");
 const userRouter = require('../routes/userRouter');
 const issueRouter = require('../routes/issueRouter');
+const contactRouter = require('../routes/contactRouter');
 
 app.use(
     session({
@@ -34,6 +35,7 @@ app.use("/", authRouter);
 app.use("/", otpRouter);
 app.use('/', userRouter);
 app.use('/', issueRouter);
+app.use('/', contactRouter);
 
 
 // A simple route to keep the server awake
