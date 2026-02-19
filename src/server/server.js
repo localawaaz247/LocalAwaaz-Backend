@@ -12,6 +12,7 @@ const passport = require("../config/passport");
 const userRouter = require('../routes/userRouter');
 const issueRouter = require('../routes/issueRouter');
 const contactRouter = require('../routes/contactRouter');
+const mediaRouter = require('../routes/mediaRouter');
 
 app.use(
     session({
@@ -21,9 +22,9 @@ app.use(
     })
 );
 app.use(cors({
-  origin: '*', // Or your specific frontend domains
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'] 
+    origin: '*', // Or your specific frontend domains
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
 
 app.use(passport.initialize());
@@ -40,6 +41,7 @@ app.use("/", otpRouter);
 app.use('/', userRouter);
 app.use('/', issueRouter);
 app.use('/', contactRouter);
+app.use('/', mediaRouter);
 
 
 // A simple route to keep the server awake

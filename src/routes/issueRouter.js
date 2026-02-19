@@ -223,6 +223,18 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             else if (field === 'title' || field === 'description') {
                 issue[field] = req.body[field].trim();
             }
+            // --- NEW: Handle Media Array ---
+            else if (field === 'media') {
+                if (Array.isArray(req.body.media)) {
+                    // Map over the array to ensure it perfectly matches your Schema [{ url: String }]
+                    issue.media = req.body.media.map(item => {
+                        // This safely handles if the frontend sends raw strings ["url"] 
+                        // OR if it sends objects [{"url": "url"}]
+                        const stringUrl = typeof item === 'object' ? item.url : item;
+                        return { url: stringUrl };
+                    });
+                }
+            }
             // Note: 'category' is handled by the default 'else' block 
             // because the validator already uppercased it in req.body
             else {
