@@ -5,7 +5,7 @@ const validate = require('validator');
  * * LOGIC EXPLAINED:
  * 1. Partial Updates: We use `if (field !== undefined)` to check if a field exists.
  * - If a field is missing (undefined), we SKIP validation (user isn't updating it).
- * - If a field exists, we apply strict validation rules.
+ * - If a field exists, we apply strict validation rules.   
  * * 2. Sanitization: We automatically convert 'category' to UPPERCASE inside req.body
  * so the controller receives clean data.
  * * @param {Object} req - The Express request object
@@ -24,6 +24,7 @@ const checkIssueUpdates = (req) => {
     // ============================================================
     // Only validate if 'title' is being updated
     if (title !== undefined) {
+        if (typeof title !== 'string') throw new Error('Title must be a text string');
         // Prevent users from saving an empty title (e.g., "   ")
         if (!title.trim()) {
             throw new Error('Title cannot be empty');
@@ -40,8 +41,9 @@ const checkIssueUpdates = (req) => {
     // 2. CATEGORY VALIDATION
     // ============================================================
     if (category !== undefined) {
+        if (typeof category !== 'string') throw new Error('Category must be a text string');
         // Prevent empty strings
-        if (category === "") {
+        if (category.trim() === "") {
             throw new Error('Category must be selected');
         }
 
@@ -59,8 +61,9 @@ const checkIssueUpdates = (req) => {
     // 3. DESCRIPTION VALIDATION
     // ============================================================
     if (description !== undefined) {
+        if (typeof description !== 'string') throw new Error('Description must be a text string');
         // Prevent empty description
-        if (description === "") {
+        if (description.trim() === "") {
             throw new Error("Description must be written");
         }
 
@@ -74,6 +77,10 @@ const checkIssueUpdates = (req) => {
     // 4. LOCATION VALIDATION
     // ============================================================
     if (location !== undefined) {
+        // Prevent null or string inputs crashing the object checks
+        if (typeof location !== 'object' || location === null) {
+            throw new Error('Location must be a valid object');
+        }
         // We only check address and geoData because that's what the Schema has.
         if (location.address && typeof location.address !== 'string') {
             throw new Error('Address must be a string');
@@ -106,7 +113,10 @@ const checkIssueUpdates = (req) => {
         if (!Array.isArray(media)) {
             throw new Error("Media must be an array");
         }
-
+        //Atleast one media required
+        if (media.length < 1) {
+            throw new Error("Atleast one media required");
+        }
         // Limit the number of uploads to 3
         if (media.length > 3) {
             throw new Error('You can upload maximum of 3 media');
@@ -114,7 +124,11 @@ const checkIssueUpdates = (req) => {
 
         // Check every item in the array for a valid URL
         media.forEach((item) => {
-            if (item.url && !validate.isURL(item.url)) {
+            // Unify the format: extract string whether it's an object or a flat string
+            const stringUrl = typeof item === 'object' && item !== null ? item.url : item;
+
+            // Validate the extracted string
+            if (!stringUrl || typeof stringUrl !== 'string' || !validate.isURL(stringUrl)) {
                 throw new Error("Upload valid media URL");
             }
         })

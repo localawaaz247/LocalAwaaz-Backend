@@ -107,7 +107,10 @@ const checkIssueCreation = (req) => {
         if (!Array.isArray(media)) {
             throw new Error("Media must be an array");
         }
-
+        //Atleast 1 media required
+        if (media.length < 1) {
+            throw new Error("Atleast 1 media required")
+        }
         // Limit: Max 3 files allowed per issue
         if (media.length > 3) {
             throw new Error("You can upload maximum of 3 media");

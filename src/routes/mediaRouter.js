@@ -4,7 +4,6 @@ const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const crypto = require("crypto");
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
-const Issue = require('../models/Issue');
 
 const mediaRouter = express.Router();
 // 1. Initialize Cloudflare R2 Client
@@ -18,46 +17,45 @@ const s3 = new S3Client({
 });
 
 // 2. Endpoint to generate the Presigned URL
-mediaRouter.post("/get-upload-url", userAuth, profileAuth, async (req, res) => {
+mediaRouter.post("/get-upload-urls", userAuth, profileAuth, async (req, res) => {
     try {
-        const { fileType, originalName } = req.body;
+        const { files } = req.body; // Expecting an array: [{ fileType: "...", originalName: "..." }]
 
-        // Safety check
-        if (!fileType || !originalName) {
-            return res.status(400).json({ error: "Missing file details" });
+        if (!files || !Array.isArray(files) || files.length === 0) {
+            return res.status(400).json({ success: false, message: "No files provided" });
+        }
+        if (files.length > 3) {
+            return res.status(400).json({ success: false, message: "Only 3 media is allowed" });
         }
 
-        // --- NEW: Security Check for Allowed File Types ---
         const allowedTypes = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4'];
-        if (!allowedTypes.includes(fileType)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid file type. Only JPG, PNG, WEBP, and MP4 are allowed."
+
+        // We use Promise.all to generate all URLs concurrently (makes it super fast)
+        const uploadData = await Promise.all(files.map(async (file) => {
+            if (!allowedTypes.includes(file.fileType)) {
+                throw new Error(`Invalid file type: ${file.fileType}`);
+            }
+
+            const safeOriginalName = file.originalName.replace(/\s+/g, '-');
+            const uniqueFileName = `${crypto.randomUUID()}-${safeOriginalName}`;
+
+            const command = new PutObjectCommand({
+                Bucket: process.env.R2_BUCKET_NAME,
+                Key: uniqueFileName,
+                ContentType: file.fileType,
             });
-        }
 
-        // Sanitize spaces out of the filename
-        const safeOriginalName = originalName.replace(/\s+/g, '-');
-        const uniqueFileName = `${crypto.randomUUID()}-${safeOriginalName}`;
+            const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 });
+            const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
 
-        const command = new PutObjectCommand({
-            Bucket: process.env.R2_BUCKET_NAME,
-            Key: uniqueFileName,
-            ContentType: fileType,
-        });
+            return { uploadUrl, publicUrl, originalName: file.originalName };
+        }));
 
-        // Generate a URL that expires in 60 seconds
-        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 60 });
-
-        // The public URL where the file will live (requires R2 public access enabled)
-        const publicUrl = `${process.env.R2_PUBLIC_URL}${uniqueFileName}`;
-
-        return res.json({ success: true, data: { uploadUrl, publicUrl } });
+        return res.status(200).json({ success: true, message: "Upload data sent", data: uploadData });
     } catch (error) {
-        console.log("Predesigned URL Error", error);
-        return res.status(500).json({ success: false, message: "Failed to generate upload URL" });
+        console.error("Presigned URLs Error", error);
+        return res.status(500).json({ success: false, message: "Failed to generate URLs" });
     }
 });
-
 
 module.exports = mediaRouter
