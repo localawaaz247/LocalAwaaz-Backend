@@ -341,15 +341,15 @@ authRouter.get(
          * with access token.
          */
         const accessToken = generateAccessToken(req.user._id);
-        
+
         if (!req.user.isProfileComplete) {
             return res.redirect(
-                `${process.env.FRONTEND_URL}/complete-profile?token=${accessToken}`
+                `${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=false`
             );
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}/dashboard?token=${accessToken}`);
+        res.redirect(`${process.env.FRONTEND_URL}?token=${accessToken}&isProfileComplete=true`);
     }
 );
 

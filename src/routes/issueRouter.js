@@ -24,47 +24,39 @@ const calculateImpactScore = require('../utils/impactScore');
 // POST: Create Issue
 // ---------------------------------------------------------
 issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
+    // 1. Start the Transaction Session
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
     try {
         const userId = req.userId;
 
-        // 1. VALIDATION (Strict)
-        // Ensures title, category, etc. exist. If not, throws error.
+        // Validation (Strict)
         checkIssueCreation(req);
-
-        // Destructure safely after validation
         const { title, category, description, location, media, isAnonymous } = req.body;
 
-        const user = await User.findById(userId)
+        // 2. Fetch User (Pass the session!)
+        const user = await User.findById(userId).session(session);
         if (!user) {
-            return res.status(404).json({ success: false, message: 'User not Found' });
+            throw new Error('User not found'); // Throws to the catch block to abort transaction
         }
         if (!user.isEmailVerified) {
-            return res.status(400).json({ success: false, message: "Verify email before Posting" });
+            throw new Error('Verify email before posting');
         }
-        //PRIORITY logic
-        let priority;
+
+        // 3. Priority Logic
+        let priority = 'LOW';
         switch (category) {
-            case 'SAFETY':
-                priority = 'CRITICAL'
-                break;
+            case 'SAFETY': priority = 'CRITICAL'; break;
             case 'WATER_SUPPLY':
             case 'ELECTRICITY':
-            case 'SANITATION':
-                priority = 'HIGH'
-                break;
+            case 'SANITATION': priority = 'HIGH'; break;
             case 'ROAD_&_POTHOLES':
             case 'GARBAGE':
             case 'STREET_LIGHTS':
-            case 'TRAFFIC':
-                priority = 'MEDIUM'
-                break;
-            case 'ENCROACHMENT':
-                priority = 'LOW'
-                break;
-            default:
-                priority = 'LOW'
-                break;
+            case 'TRAFFIC': priority = 'MEDIUM'; break;
         }
+
         const issueLocation = {
             address: location?.address || 'Anonymous location',
             city: location?.city,
@@ -74,31 +66,56 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
                 type: 'Point',
                 coordinates: location?.geoData?.coordinates
             }
-        }
-        const newIssue = await Issue.create({
+        };
+
+        // 4. Format Media Array to match Schema requirements
+        // Handles an array of strings OR an array of objects from the frontend
+        const formattedMedia = Array.isArray(media)
+            ? media.map(m => ({ url: m.publicUrl || m.url || m }))
+            : [];
+
+        // 5. Create Issue
+        // CRITICAL Mongoose Trap: When using sessions, Issue.create MUST take an array of objects.
+        const [newIssue] = await Issue.create([{
             reportedBy: userId,
             title: title.trim(),
             isAnonymous,
-            // Validator already uppercased it in req.body, but being explicit is fine
-            category: req.body.category,
+            category: category,
             description: description.trim(),
             location: issueLocation,
             priority,
-            media: media || [],
+            media: formattedMedia,
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
                 changedBy: userId,
                 note: "Issue reported by user"
             }]
-        });
+        }], { session });
+
+        // 6. Update User Score
         await User.findByIdAndUpdate(userId, {
             $inc: { issuesReported: 1, civilScore: 20 }
+        }, { session });
+
+        // 7. Commit the Transaction (Saves everything to the database permanently)
+        await session.commitTransaction();
+        session.endSession();
+
+        return res.status(201).json({
+            success: true,
+            message: "Your Issue has been recorded",
+            issueId: newIssue._id
         });
-        return res.status(201).json({ success: true, message: "Your Issue has been recorded" })
-    }
-    catch (err) {
-        return res.status(400).json({ success: false, message: err.message });
+
+    } catch (err) {
+        // 8. Rollback! If anything above fails, undo all changes.
+        await session.abortTransaction();
+        session.endSession();
+
+        // Differentiate between our custom errors and server crashes
+        const statusCode = err.message === 'User not found' || err.message === 'Verify email before posting' ? 400 : 500;
+        return res.status(statusCode).json({ success: false, message: err.message });
     }
 });
 //GET issues according to City and Pincode
@@ -226,11 +243,9 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             // --- NEW: Handle Media Array ---
             else if (field === 'media') {
                 if (Array.isArray(req.body.media)) {
-                    // Map over the array to ensure it perfectly matches your Schema [{ url: String }]
                     issue.media = req.body.media.map(item => {
-                        // This safely handles if the frontend sends raw strings ["url"] 
-                        // OR if it sends objects [{"url": "url"}]
-                        const stringUrl = typeof item === 'object' ? item.url : item;
+                        // Safely check for url OR publicUrl
+                        const stringUrl = typeof item === 'object' ? (item.url || item.publicUrl) : item;
                         return { url: stringUrl };
                     });
                 }
