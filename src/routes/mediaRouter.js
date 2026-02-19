@@ -8,6 +8,7 @@ const sharp = require('sharp');
 const fs = require('fs');
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
+const TempMedia = require('../models/TempMedia');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -61,7 +62,26 @@ const compressImage = async (inputPath, outputPath) => {
         .toFile(outputPath);
 };
 
-mediaRouter.post("/upload-issues", userAuth, profileAuth, upload.array('issue_media', 3), async (req, res) => {
+// 1. Extract the multer middleware
+const uploadMiddleware = upload.array('issue_media', 3);
+
+// 2. Wrap it with our custom error handler to prevent HTML crash pages
+mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
+    uploadMiddleware(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({
+                    success: false,
+                    message: "A file exceeds the 150MB raw upload limit"
+                });
+            }
+            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
+        } else if (err) {
+            return res.status(500).json({ success: false, message: err.message });
+        }
+        next(); // Proceed to the main handler if no error
+    });
+}, async (req, res) => {
     req.setTimeout(600000);
 
     try {
@@ -145,6 +165,10 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, upload.array('issue_me
             });
 
             await s3.send(command);
+
+            // Logs to TempMedia for the Garbage Collector
+            await TempMedia.create({ r2Key: uniqueFileName });
+
             return {
                 publicUrl: `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`,
                 originalName: file.originalname
@@ -164,11 +188,6 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, upload.array('issue_me
 
         if (req.files) {
             req.files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path) });
-        }
-
-        // Handles the specific error thrown by Multer if the raw file is over 150MB
-        if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ success: false, message: "A file exceeded the 150MB raw upload limit." });
         }
 
         return res.status(500).json({ success: false, message: "An internal server error occurred." });

@@ -5,7 +5,6 @@ const authRouter = require('../routes/authRouter');
 const otpRouter = require('../routes/otpRouter');
 
 const cors = require('cors');
-const app = express();
 const cookieParser = require('cookie-parser');
 const session = require("express-session");
 const passport = require("../config/passport");
@@ -13,6 +12,11 @@ const userRouter = require('../routes/userRouter');
 const issueRouter = require('../routes/issueRouter');
 const contactRouter = require('../routes/contactRouter');
 const mediaRouter = require('../routes/mediaRouter');
+const startGarbageCollector = require('../utils/garbageCollector');
+
+const app = express();
+// Start the background cron jobs
+startGarbageCollector();
 
 app.use(
     session({

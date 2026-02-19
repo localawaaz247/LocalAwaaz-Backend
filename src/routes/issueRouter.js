@@ -19,6 +19,7 @@ const locationAuth = require('../middlewares/locationAuth');
 const checkIssueFlags = require('../utils/checkIssueFlags');
 const Share = require('../models/Share');
 const calculateImpactScore = require('../utils/impactScore');
+const TempMedia = require('../models/TempMedia');
 
 // ---------------------------------------------------------
 // POST: Create Issue
@@ -100,8 +101,13 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
 
         // 7. Commit the Transaction (Saves everything to the database permanently)
         await session.commitTransaction();
+        const mediaKeys = formattedMedia.map(m => {
+            // Extract just the filename from the end of the publicUrl
+            return m.url.split('/').pop();
+        });
         session.endSession();
 
+        await TempMedia.deleteMany({ r2Key: { $in: mediaKeys } });
         return res.status(201).json({
             success: true,
             message: "Your Issue has been recorded",
@@ -157,7 +163,6 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         }
 
         // 2. Validate Body (Partial)
-        // Handles "undefined" fields gracefully
         checkIssueUpdates(req);
 
         const issue = await Issue.findById(id);
@@ -168,6 +173,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         if (issue.isDeleted) {
             return res.status(400).json({ success: false, message: "The issue has been deleted" });
         }
+        
         const { status } = issue;
         if (status !== "OPEN") {
             return res.status(400).json({ success: false, message: "Issues with status 'OPEN' can be updated" })
@@ -179,53 +185,40 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         }
 
         const updates = Object.keys(req.body);
-        const isValidUpdate = updates.every((field) => {
-            return allowedUpdates.includes(field);
-        });
+        const isValidUpdate = updates.every((field) => allowedUpdates.includes(field));
 
         if (!isValidUpdate) {
             return res.status(400).json({ success: false, message: "Invalid field in update request" });
         }
-        //PRIORITY logic
-        // 3. PRIORITY LOGIC (Fixed Scope)
-        // Only recalculate if category is part of the request body
+
+        // 3. PRIORITY LOGIC
         if (req.body.category) {
             const upperCat = req.body.category.toUpperCase();
-
-            // NOTE: These cases must match your 'Create Issue' logic EXACTLY
             let newPriority;
             switch (upperCat) {
-                case 'SAFETY':
-                    newPriority = 'CRITICAL';
-                    break;
+                case 'SAFETY': newPriority = 'CRITICAL'; break;
                 case 'WATER_SUPPLY':
                 case 'ELECTRICITY':
-                case 'SANITATION':
-                    newPriority = 'HIGH';
-                    break;
+                case 'SANITATION': newPriority = 'HIGH'; break;
                 case 'ROAD_&_POTHOLES':
                 case 'GARBAGE':
                 case 'STREET_LIGHTS':
-                case 'TRAFFIC':
-                    newPriority = 'MEDIUM';
-                    break;
+                case 'TRAFFIC': newPriority = 'MEDIUM'; break;
                 case 'ENCROACHMENT':
-                default:
-                    newPriority = 'LOW';
-                    break;
+                default: newPriority = 'LOW'; break;
             }
             issue.priority = newPriority;
-            issue.category = upperCat; // Ensure we save the uppercase version
+            issue.category = upperCat;
         }
-        // 4. Update Loop
-        updates.forEach((field) => {
-            if (field === 'category') return;
+
+        // 4. Update Loop (Changed to for...of to support async/await operations)
+        for (const field of updates) {
+            if (field === 'category') continue;
+            
             if (field === 'location') {
                 const newLoc = req.body.location;
                 if (!issue.location) issue.location = {};
-                if (newLoc.address) {
-                    issue.location.address = newLoc?.address;
-                }
+                if (newLoc.address) issue.location.address = newLoc?.address;
                 if (newLoc.city) issue.location.city = newLoc?.city;
                 if (newLoc.pinCode) issue.location.pinCode = newLoc?.pinCode;
                 if (newLoc.state) issue.location.state = newLoc?.state;
@@ -240,22 +233,46 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             else if (field === 'title' || field === 'description') {
                 issue[field] = req.body[field].trim();
             }
-            // --- NEW: Handle Media Array ---
+            // --- NEW: Handle Media Array & Garbage Collection ---
             else if (field === 'media') {
                 if (Array.isArray(req.body.media)) {
+                    // Grab old keys before overwriting
+                    const oldMediaKeys = issue.media.map(m => m.url.split('/').pop());
+
+                    // Format and apply new media array
                     issue.media = req.body.media.map(item => {
-                        // Safely check for url OR publicUrl
                         const stringUrl = typeof item === 'object' ? (item.url || item.publicUrl) : item;
                         return { url: stringUrl };
                     });
+
+                    // Grab new keys
+                    const newMediaKeys = issue.media.map(m => m.url.split('/').pop());
+
+                    // CLAIM NEW MEDIA: Remove newly uploaded files from TempMedia so they aren't deleted tonight
+                    await TempMedia.deleteMany({ r2Key: { $in: newMediaKeys } });
+
+                    // DELETE REMOVED MEDIA: Find files the user deleted and nuke them from Cloudflare
+                    const keysToDelete = oldMediaKeys.filter(key => !newMediaKeys.includes(key));
+                    
+                    for (const key of keysToDelete) {
+                        try {
+                            const command = new DeleteObjectCommand({
+                                Bucket: process.env.R2_BUCKET_NAME,
+                                Key: key,
+                            });
+                            await s3.send(command);
+                            console.log(`Deleted removed media from Cloudflare: ${key}`);
+                        } catch (err) {
+                            console.error(`Failed to delete media ${key} from Cloudflare:`, err);
+                        }
+                    }
                 }
             }
-            // Note: 'category' is handled by the default 'else' block 
-            // because the validator already uppercased it in req.body
             else {
                 issue[field] = req.body[field];
             }
-        });
+        }
+        
         await issue.save();
         return res.status(200).json({ success: true, message: "Issue updated successfully" });
     }
