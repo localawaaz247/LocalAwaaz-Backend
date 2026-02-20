@@ -282,7 +282,7 @@ authRouter.post('/refresh_token', async (req, res) => {
             });
         }
 
-        const accessToken = generateAccessToken(decoded._id);
+        const accessToken = generateAccessToken(decoded.id);
         return res.json({ accessToken });
 
     } catch (err) {
