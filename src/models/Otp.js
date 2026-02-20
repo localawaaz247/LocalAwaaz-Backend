@@ -25,6 +25,15 @@ const OtpSchema = new mongoose.Schema({
     userName: {
         type: String
     },
+    /**
+     * Purpose:
+     * - Purpose of email sending
+     */
+    purpose: {
+        type: String,
+        enum: ['REGISTER', 'PASSWORD_RESET'],
+        default: 'REGISTER'
+    },
 
     /**
      * OTP value:
@@ -34,7 +43,14 @@ const OtpSchema = new mongoose.Schema({
     otp: {
         type: String
     },
-
+    /**
+     * ResetToken
+     * -Reset Token is generated
+     */
+    resetToken: {
+        type: String,
+        default: null
+    },
     /**
      * Verification flag:
      * - True if user successfully verified OTP

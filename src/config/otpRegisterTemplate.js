@@ -1,4 +1,4 @@
-const otpEmailTemplate = (otp) => {
+const otpRegisterTemplate = (otp) => {
   // Split OTP into individual digits
   const otpArray = otp.toString().split('');
 
@@ -175,4 +175,4 @@ const otpEmailTemplate = (otp) => {
   `;
 };
 
-module.exports = otpEmailTemplate;
+module.exports = otpRegisterTemplate;

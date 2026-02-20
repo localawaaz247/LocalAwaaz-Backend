@@ -1,5 +1,6 @@
 const nodemailer = require("nodemailer");
-const otpEmailTemplate = require("./otpEmailTemplate");
+const otpRegisterTemplate = require("./otpRegisterTemplate");
+const passwordResetTemplate = require("./passwordResetTemplate");
 require("dotenv").config();
 
 /**
@@ -22,16 +23,30 @@ const transporter = nodemailer.createTransport({
  * SEND OTP EMAIL
  * ============================
  */
-async function sendMail({ email, generatedOtp }) {
+async function sendMail({ email, generatedOtp, purpose = "REGISTER" }) {
   try {
+    let emailSubject = '';
+    let emailHtml = '';
+    switch (purpose) {
+      case "PASSWORD_RESET":
+        emailSubject = "LocalAwaaz - Password Reset Request";
+        emailHtml = passwordResetTemplate(generatedOtp);
+        break;
+
+      case "REGISTER":
+      default:
+        emailSubject = "LocalAwaaz - Email Verification OTP";
+        emailHtml = otpRegisterTemplate(generatedOtp);
+        break;
+    }
     const info = await transporter.sendMail({
       from: `"LocalAwaaz" <no-reply@localawaaz.in>`,
       to: email,
-      subject: "Email Verification OTP",
-      html: otpEmailTemplate(generatedOtp),
+      subject: emailSubject,
+      html: emailHtml,
     });
 
-    console.log("Email sent:", info.messageId);
+    console.log(`[${purpose}]Email sent:`, info.messageId);
   } catch (error) {
     console.error("Error sending mail:", error);
     throw error; // important: don't silently swallow OTP failures

@@ -48,7 +48,8 @@ otpRouter.post('/otp/request', async (req, res) => {
                 message: "Email already registered. Please login."
             });
         }
-        const otpRecord = await OtpModel.findOne({ email });
+        const purpose = "REGISTER";
+        const otpRecord = await OtpModel.findOne({ email, purpose });
         if (otpRecord?.blockUntil && otpRecord.blockUntil > Date.now()) {
             return res.status(429).json({
                 success: false,
@@ -60,13 +61,14 @@ otpRouter.post('/otp/request', async (req, res) => {
 
         const attempts = (otpRecord?.attempts || 0) + 1;
         const blockUntil = attempts > 5 ? new Date(Date.now() + 5 * 60 * 1000) : null;
-        await sendMail({ email, generatedOtp });
+        await sendMail({ email, generatedOtp, purpose });
         await OtpModel.findOneAndUpdate(
-            { email },
+            { email, purpose },
             {
                 email,
                 userName: userName, // <--- BINDING HAPPENS HERE
                 otp: hashedOtp,
+                purpose,
                 attempts,
                 blockUntil,
                 expiresAt: new Date(Date.now() + 10 * 60 * 1000),
@@ -74,9 +76,15 @@ otpRouter.post('/otp/request', async (req, res) => {
             },
             { upsert: true, new: true }
         );
+        // Example: turns "ankitpandey@gmail.com" into "an*********@gmail.com"
+        const maskEmail = (email) => {
+            if (!email || !email.includes('@')) return email;
+            const [name, domain] = email.split('@');
+            return `${name.substring(0, 2)}${'*'.repeat(name.length - 2)}@${domain}`;
+        };
         res.status(200).json({
             success: true,
-            message: `OTP sent to ${email}`
+            message: `OTP sent to ${maskEmail(email)}`
         });
 
     } catch (err) {
@@ -102,48 +110,25 @@ otpRouter.post('/otp/verify', async (req, res) => {
         const { email, otp, userName } = req.body;
 
         if (!email || !otp || !userName) {
-            return res.status(400).json({
-                message: 'Email, OTP, and userName is required'
-            });
+            return res.status(400).json({ message: 'Email, OTP, and userName are required' });
         }
-        const otpRecord = await OtpModel.findOne({ email });
-        if (!otpRecord) {
-            return res.status(400).json({
-                success: false,
-                message: "OTP request not found. Please request a new OTP."
-            });
-        };
-        if (otpRecord.userName !== userName) {
-            return res.status(400).json({
-                success: false,
-                message: "This email verification belongs to a different username."
-            });
-        }
-        if (otpRecord.expiresAt < Date.now()) {
-            return res.status(400).json({
-                success: false,
-                message: "OTP has expired. Please request a new one."
-            });
-        }
-        const isValid = await bcrypt.compare(otp, otpRecord.otp);
-        if (!isValid) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid OTP"
-            });
-        }
-        otpRecord.isVerified = true;
-        otpRecord.otp = null;
-        await otpRecord.save();
+
+        // Pass the data to your utility! 
+        // If it fails, it throws an error and jumps straight to the catch block.
+        await verifyOtp(email, otp, "REGISTER", userName);
+
+        // If we reach this line, the OTP was perfectly valid!
         res.status(200).json({
             success: true,
             message: 'Email verified successfully!'
         });
+
     } catch (err) {
-        console.log(err)
-        res.status(400).json({
+        // This catches ALL errors from your utility ("Expired", "Invalid OTP", etc.)
+        console.log("OTP Verification Error:", err);
+        return res.status(400).json({
             success: false,
-            message: err.message
+            message: err.message || "OTP Verification Failed"
         });
     }
 });
