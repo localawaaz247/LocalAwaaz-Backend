@@ -348,7 +348,14 @@ authRouter.get(
          * with access token.
          */
         const accessToken = generateAccessToken(req.user._id);
+        const refreshToken = generateRefreshToken(req.user._id);
 
+        res.cookie('refreshToken', refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: "lax",
+            maxAge: "3m"
+        })
         if (!req.user.isProfileComplete) {
             return res.redirect(
                 `${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=false`
