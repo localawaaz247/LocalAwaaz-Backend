@@ -279,7 +279,7 @@ authRouter.post('/refresh_token', async (req, res) => {
         }
 
         const accessToken = generateAccessToken(decoded._id);
-        res.json({ accessToken });
+        return res.json({ accessToken });
 
     } catch (err) {
         res.status(401).json({
@@ -349,7 +349,7 @@ authRouter.get(
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}?token=${accessToken}&isProfileComplete=true`);
+        res.redirect(`${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=true`);
     }
 );
 
