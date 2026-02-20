@@ -18,27 +18,36 @@ const app = express();
 // Start the background cron jobs
 startGarbageCollector();
 
+app.set("trust proxy", 1);
+app.use(cors({
+    origin: [
+        'https://www.localawaaz.in',
+        'http://localhost:5173',
+        'https://localawaaz.in'
+    ],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
+}));
 app.use(
     session({
         secret: process.env.SESSION_SECRET,
         resave: false,
         saveUninitialized: false,
+        cookie: {
+            secure: process.env.NODE_ENV === "production",        // HTTPS required
+            httpOnly: true,
+            sameSite: process.env.NODE_ENV === "production" ? "none" : "lax"    // required for frontend-backend on different domains
+        }
     })
 );
-app.use(cors({
-    origin: '*', // Or your specific frontend domains
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json());
 app.use(cookieParser());
 
-app.set("trust proxy", 1);
 
 app.use("/", authRouter);
 app.use("/", otpRouter);

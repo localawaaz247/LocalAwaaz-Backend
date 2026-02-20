@@ -230,10 +230,12 @@ authRouter.post('/auth/login', async (req, res) => {
          */
         const accessToken = generateAccessToken(user._id);
         const refreshToken = generateRefreshToken(user._id);
-
+        const isProduction = process.env.NODE_ENV === "production"
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
-            path: '/refresh_token'
+            path: '/refresh_token',
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax"
         });
 
         // Remove password before sending user object
@@ -299,9 +301,12 @@ authRouter.post('/refresh_token', async (req, res) => {
  */
 authRouter.post('/auth/logout', (req, res) => {
     try {
+        const isProduction = process.env.NODE_ENV === "production";
         res.clearCookie('refreshToken', {
             httpOnly: true,
-            path: '/refresh_token'
+            path: '/refresh_token',
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax"
         });
 
         res.status(200).json({
