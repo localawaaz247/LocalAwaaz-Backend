@@ -220,7 +220,7 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/profile', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/profile', userAuth, async (req, res) => {
     try {
         const { userId } = req;
         const user = await User.findById(userId).select("-password");
