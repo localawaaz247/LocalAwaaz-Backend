@@ -155,8 +155,7 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
                     spherical: true,
                     query: {
                         isDeleted: false,
-                        reportedBy: { $ne: userId },
-                        'confirmations.user': { $ne: userId }
+                        reportedBy: { $ne: userId }
                     }
                 }
             },
@@ -463,6 +462,77 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
         return res.status(500).json({
             success: false,
             message: "Error fetching confirmed issues"
+        });
+    }
+});
+
+userRouter.patch('/me/preferences/notification', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { enableNotification } = req.body;
+        if (typeof enableNotification !== 'boolean') {
+            return res.status(400).json({ success: false, message: "Invalid preference value" });
+        }
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: { 'preferences.globalNotifications': enableNotification } },
+            { new: true }
+        ).select('preferences');
+
+        return res.status(200).json(
+            {
+                success: true,
+                message: "Notification preferences updated",
+                data: updatedUser.preferences
+            }
+        )
+    }
+    catch (err) {
+        console.log("Notification Preferences Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Failed to update preferences" });
+    }
+})
+
+userRouter.post('/get-location-from-coords', userAuth, async (req, res) => {
+    try {
+        const { lat, lng } = req.body;
+
+        if (!lat || !lng) {
+            return res.status(400).json({
+                success: false,
+                message: "Latitude and Longitude required"
+            });
+        }
+
+        const axios = require('axios');
+
+        const response = await axios.get(
+            `https://api.opencagedata.com/geocode/v1/json?q=${lat}+${lng}&key=${process.env.OPENCAGE_API_KEY}`
+        );
+
+        const components = response.data.results[0]?.components;
+
+        if (!components) {
+            return res.status(404).json({
+                success: false,
+                message: "Location not found"
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                city: components.city || components.town || components.village,
+                state: components.state,
+                country: components.country
+            }
+        });
+
+    } catch (err) {
+        console.log("Reverse Geocoding Error:", err);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch location"
         });
     }
 });

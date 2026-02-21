@@ -182,6 +182,15 @@ const userSchema = new mongoose.Schema({
     isProfileComplete: {
         type: Boolean,
         default: false
+    },
+    /**
+     * Global Notification toggle
+     */
+    preferences: {
+        globalNotifications: {
+            type: Boolean,
+            default: true // Users are opted-in by default
+        }
     }
 },
     {
