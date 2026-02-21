@@ -125,6 +125,57 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         return res.status(statusCode).json({ success: false, message: err.message });
     }
 });
+// ---------------------------------------------------------
+// GET: Get issue accoring to issue id
+// ---------------------------------------------------------
+issueRouter.get('/issue/:id', userAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid issue id" });
+        }
+
+        // .populate() to get the author's details from the User collection
+        const issueRecord = await Issue.findOne({
+            _id: id,
+            isDeleted: false
+        }).populate('reportedBy', 'name userName profilePic civilScore');
+
+        if (!issueRecord) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        // 3. ENHANCEMENT: Handle the "isAnonymous" masking for the single issue view
+        // We convert the Mongoose document to a plain JS object so we can modify it safely
+        let responseData = issueRecord.toObject();
+
+        if (responseData.isAnonymous) {
+            responseData.author = {
+                name: "Anonymous Citizen",
+                userName: "Hidden",
+                profilePic: "https://res.cloudinary.com/your-cloud-name/image/upload/v1/assets/anonymous_avatar.png",
+                civilScore: null,
+                _id: null
+            };
+        } else {
+            responseData.author = responseData.reportedBy;
+        }
+
+        // Remove the original reportedBy object so we don't leak the true identity
+        delete responseData.reportedBy;
+
+        return res.status(200).json({
+            success: true,
+            message: "Issue found",
+            data: responseData
+        });
+
+    } catch (err) {
+        console.error("Issue fetch error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Issue not found" });
+    }
+});
+
 //GET issues according to City and Pincode
 issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
     try {
