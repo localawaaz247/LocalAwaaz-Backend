@@ -18,7 +18,7 @@ const bcrypt = require('bcrypt')
  *
  * Requires authentication.
  */
-userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
+userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
     try {
         const {
             userName,
@@ -132,7 +132,7 @@ userRouter.patch("/users/complete-profile", userAuth, async (req, res) => {
     }
 });
 
-userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
     try {
         const { lng, lat, page = 1, limit = 10 } = req.query;
         if (!lng || !lat) {
@@ -155,7 +155,8 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
                     spherical: true,
                     query: {
                         isDeleted: false,
-                        reportedBy: { $ne: userId }
+                        reportedBy: { $ne: userId },
+                        'confirmations.user': { $ne: userId }
                     }
                 }
             },
@@ -220,7 +221,7 @@ userRouter.get('/feed', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/profile', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/me/profile', userAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const user = await User.findById(userId).select("-password");
@@ -242,7 +243,7 @@ userRouter.get('/profile', userAuth, profileAuth, async (req, res) => {
 
 })
 
-userRouter.patch('/profile/edit', userAuth, profileAuth, async (req, res) => {
+userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
 
@@ -331,7 +332,7 @@ userRouter.patch('/profile/edit', userAuth, profileAuth, async (req, res) => {
     }
 });
 
-userRouter.get('/my-issues', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { status, page = 1, limit = 10 } = req.query;
@@ -369,5 +370,101 @@ userRouter.get('/my-issues', userAuth, profileAuth, async (req, res) => {
     }
 })
 
+userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) => {
+    try {
+        // 1. Pagination Setup
+        const { page = 1, limit = 10 } = req.query;
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
+
+        // 2. Ensure userId is an ObjectId for the aggregation pipeline
+        const userId = new mongoose.Types.ObjectId(req.userId);
+
+        // 3. Aggregation Pipeline
+        const issues = await Issue.aggregate([
+            {
+                // STEP A: Filter for issues the user confirmed, excluding their own
+                $match: {
+                    'confirmations.user': userId,
+                    reportedBy: { $ne: userId },
+                    isDeleted: false
+                }
+            },
+            {
+                // STEP B: Sort by newest first
+                $sort: { createdAt: -1 }
+            },
+            { $skip: skip },
+            { $limit: limitNum },
+            {
+                // STEP C: Join the User collection
+                $lookup: {
+                    from: 'users',
+                    localField: 'reportedBy',
+                    foreignField: '_id',
+                    as: 'authorDetails'
+                }
+            },
+            {
+                // STEP D: Flatten the author array
+                $unwind: '$authorDetails'
+            },
+            {
+                // STEP E: Project the exact same fields as your Feed API
+                $project: {
+                    title: 1,
+                    description: 1,
+                    category: 1,
+                    location: 1,
+                    media: 1,
+                    status: 1,
+                    priority: 1,
+                    impactScore: 1,
+                    confirmationCount: 1,
+                    createdAt: 1,
+                    isAnonymous: 1,
+
+                    // CONDITIONAL AUTHOR DISPLAY (Exact match to your feed)
+                    author: {
+                        $cond: {
+                            if: { $eq: ["$isAnonymous", true] },
+                            // CASE A: Anonymous -> Mask Data
+                            then: {
+                                name: "Anonymous Citizen",
+                                userName: "Hidden",
+                                profilePic: "https://res.cloudinary.com/your-cloud-name/image/upload/v1/assets/anonymous_avatar.png",
+                                civilScore: null,
+                                _id: null
+                            },
+                            // CASE B: Public -> Show Data
+                            else: {
+                                name: "$authorDetails.name",
+                                userName: "$authorDetails.userName",
+                                profilePic: "$authorDetails.profilePic",
+                                civilScore: "$authorDetails.civilScore",
+                                _id: "$authorDetails._id"
+                            }
+                        }
+                    }
+                }
+            }
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            message: "Confirmed Issues Fetched Successfully",
+            count: issues.length,
+            data: issues
+        });
+
+    } catch (err) {
+        console.log("Confirmed Issues error", err);
+        return res.status(500).json({
+            success: false,
+            message: "Error fetching confirmed issues"
+        });
+    }
+});
 
 module.exports = userRouter;
