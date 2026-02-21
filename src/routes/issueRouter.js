@@ -21,7 +21,55 @@ const Share = require('../models/Share');
 const calculateImpactScore = require('../utils/impactScore');
 const TempMedia = require('../models/TempMedia');
 const triggerNotification = require('../utils/notificationService');
+const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const s3 = require('../config/s3Client')
 
+//GET issues according to City and Pincode
+issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { search } = req.query;
+        if (!search) return res.status(400).json({ success: false, message: "Search term required" });
+
+        const searchTerm = search.trim();
+
+        // Only searching for public and non-deleted issues
+        const query = {
+            isPublic: true,
+            isDeleted: false,
+            $or: [
+                { 'location.city': { $regex: searchTerm, $options: 'i' } },
+                { 'location.pinCode': searchTerm }
+            ]
+        };
+
+        // 1. Select only the fields useful for an area feed
+        // 2. Populate the reportedBy field to get the user's name/avatar (if not anonymous)
+        const issues = await Issue.find(query)
+            .select('title description category location.city location.pinCode status isAnonymous reportedBy media priority impactScore confirmationCount')
+            .populate('reportedBy', 'name avatar'); // Adjust 'name avatar' based on your User schema
+
+        // 3. Filter data based on the isAnonymous flag
+        const sanitizedIssues = issues.map(issue => {
+            const issueObj = issue.toObject();
+
+            if (issueObj.isAnonymous) {
+                // Completely remove the reporter's info if anonymous
+                delete issueObj.reportedBy;
+            }
+
+            return issueObj;
+        });
+
+        return res.status(200).json({
+            success: true,
+            issueCount: sanitizedIssues.length,
+            data: sanitizedIssues
+        });
+    } catch (err) {
+        console.error('Search Error:', err);
+        return res.status(500).json({ success: false, message: 'Server Error in Searching' });
+    }
+});
 // ---------------------------------------------------------
 // POST: Create Issue
 // ---------------------------------------------------------
@@ -176,30 +224,6 @@ issueRouter.get('/issue/:id', userAuth, async (req, res) => {
     }
 });
 
-//GET issues according to City and Pincode
-issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
-    try {
-        const { search } = req.query;
-        if (!search) return res.status(400).json({ success: false, message: "Search term required" });
-        const searchTerm = search.trim();
-        const query = {
-            $or: [
-                { 'location.city': { $regex: searchTerm, $options: 'i' } },
-                { 'location.pinCode': searchTerm }
-            ]
-        }
-        const issues = await Issue.find(query);
-        return res.status(200).json({
-            success: true,
-            issueCount: issues.length,
-            data: issues
-        })
-    }
-    catch (err) {
-        console.log('Search Error', err);
-        return res.status(500).json({ success: false, message: 'Server Error in Searching' });
-    }
-})
 // ---------------------------------------------------------
 // PATCH: Update Issue
 // ---------------------------------------------------------

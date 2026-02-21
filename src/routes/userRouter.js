@@ -604,7 +604,9 @@ userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
     }
 });
 
-
+/**
+ * Get locations from keywords
+ */
 userRouter.get('/locations', async (req, res) => {
     const { keyword } = req.query;
 
@@ -656,5 +658,6 @@ userRouter.get('/locations', async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch location data' });
     }
 });
+
 
 module.exports = userRouter;
