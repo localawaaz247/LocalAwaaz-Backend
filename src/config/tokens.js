@@ -21,7 +21,7 @@ const generateAccessToken = (userId) => {
     return jwt.sign(
         { id: userId },                        // Payload: minimal info
         process.env.ACCESS_TOKEN_SECRET,        // Secret key from environment
-        { expiresIn: '1m' }                    // Token validity
+        { expiresIn: '20m' }                    // Token validity
     );
 }
 
@@ -36,7 +36,7 @@ const generateRefreshToken = (userId) => {
     return jwt.sign(
         { id: userId },
         process.env.REFRESH_TOKEN_SECRET,
-        { expiresIn: '3m' }
+        { expiresIn: '7d' }
     );
 }
 

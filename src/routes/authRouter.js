@@ -349,7 +349,7 @@ authRouter.get(
          */
         const accessToken = generateAccessToken(req.user._id);
         const refreshToken = generateRefreshToken(req.user._id);
-        const EXPIRY_LIMIT = 3 * 60 * 1000
+        const EXPIRY_LIMIT = 7 * 24 * 60 * 60 * 1000
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
