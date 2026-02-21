@@ -7,7 +7,8 @@ const Issue = require("../models/Issue");
 const profileAuth = require("../middlewares/profileAuth");
 const mongoose = require('mongoose')
 const bcrypt = require('bcrypt')
-const Notification = require('../models/Notification')
+const Notification = require('../models/Notification');
+const axios = require("axios");
 
 /**
  * ============================
@@ -603,5 +604,57 @@ userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
     }
 });
 
+
+userRouter.get('/locations', async (req, res) => {
+    const { keyword } = req.query;
+
+    if (!keyword) {
+        return res.status(400).json({ error: 'Keyword query parameter is required' });
+    }
+
+    try {
+        // 1. Smart Routing: Check if the user typed exactly a 6-digit Indian Pincode
+        const isPincode = /^\d{6}$/.test(keyword.trim());
+
+        // 2. Point to the correct endpoint based on what they typed
+        const url = isPincode
+            ? `https://api.postalpincode.in/pincode/${keyword}`
+            : `https://api.postalpincode.in/postoffice/${keyword}`;
+
+        const response = await axios.get(url);
+
+        // The API wraps its response inside an array, so we grab the first item
+        const data = response.data[0];
+
+        // 3. Handle "No Results" gracefully
+        if (data.Status === "Error" || !data.PostOffice) {
+            return res.json([]); // Return empty array so your frontend doesn't crash
+        }
+
+        // 4. Map, Filter, and Limit the results
+        const results = data.PostOffice.map(place => ({
+            name: place.Name,
+            district: place.District || 'N/A',
+            state: place.State || 'N/A',
+            // The API sometimes drops the PIN in text searches, so we fall back gracefully
+            pincode: place.PINCode || (isPincode ? keyword : 'N/A'),
+            fullAddress: `${place.Name}, ${place.District}, ${place.State}`
+        }))
+            // Remove exact duplicates (India Post sometimes lists the same office multiple times)
+            .filter((value, index, self) =>
+                index === self.findIndex((t) => (
+                    t.name === value.name && t.district === value.district
+                ))
+            )
+            // Strictly limit to 5 results
+            .slice(0, 5);
+
+        return res.json({ success: true, message: "Matched locations are here...", data: results });
+
+    } catch (error) {
+        console.error('Error fetching locations:', error.message);
+        return res.status(500).json({ error: 'Failed to fetch location data' });
+    }
+});
 
 module.exports = userRouter;
