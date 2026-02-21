@@ -20,6 +20,7 @@ const checkIssueFlags = require('../utils/checkIssueFlags');
 const Share = require('../models/Share');
 const calculateImpactScore = require('../utils/impactScore');
 const TempMedia = require('../models/TempMedia');
+const triggerNotification = require('../utils/notificationService');
 
 // ---------------------------------------------------------
 // POST: Create Issue
@@ -173,7 +174,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         if (issue.isDeleted) {
             return res.status(400).json({ success: false, message: "The issue has been deleted" });
         }
-        
+
         const { status } = issue;
         if (status !== "OPEN") {
             return res.status(400).json({ success: false, message: "Issues with status 'OPEN' can be updated" })
@@ -214,7 +215,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         // 4. Update Loop (Changed to for...of to support async/await operations)
         for (const field of updates) {
             if (field === 'category') continue;
-            
+
             if (field === 'location') {
                 const newLoc = req.body.location;
                 if (!issue.location) issue.location = {};
@@ -253,7 +254,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
 
                     // DELETE REMOVED MEDIA: Find files the user deleted and nuke them from Cloudflare
                     const keysToDelete = oldMediaKeys.filter(key => !newMediaKeys.includes(key));
-                    
+
                     for (const key of keysToDelete) {
                         try {
                             const command = new DeleteObjectCommand({
@@ -272,7 +273,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
                 issue[field] = req.body[field];
             }
         }
-        
+
         await issue.save();
         return res.status(200).json({ success: true, message: "Issue updated successfully" });
     }
@@ -378,6 +379,14 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
                     civilScore: 5,
                     issuesConfirmed: 1
                 }
+            });
+            triggerNotification({
+                recipientId: confirmedIssue.reportedBy, // The owner of the issue
+                senderId: userId,                       // The person confirming
+                issueId: confirmedIssue._id,
+                type: 'ISSUE_CONFIRMED',
+                message: "Someone confirmed the issue you reported.",
+                io: req.app.get('io')                   // Grab the socket instance
             });
             return res.status(200).json(
                 {

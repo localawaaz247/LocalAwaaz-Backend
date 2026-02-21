@@ -7,6 +7,7 @@ const Issue = require("../models/Issue");
 const profileAuth = require("../middlewares/profileAuth");
 const mongoose = require('mongoose')
 const bcrypt = require('bcrypt')
+const Notification = require('../models/Notification')
 
 /**
  * ============================
@@ -466,38 +467,12 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
     }
 });
 
-userRouter.patch('/me/preferences/notification', userAuth, profileAuth, async (req, res) => {
-    try {
-        const { userId } = req;
-        const { enableNotification } = req.body;
-        if (typeof enableNotification !== 'boolean') {
-            return res.status(400).json({ success: false, message: "Invalid preference value" });
-        }
-        const updatedUser = await User.findByIdAndUpdate(
-            userId,
-            { $set: { 'preferences.globalNotifications': enableNotification } },
-            { new: true }
-        ).select('preferences');
-
-        return res.status(200).json(
-            {
-                success: true,
-                message: "Notification preferences updated",
-                data: updatedUser.preferences
-            }
-        )
-    }
-    catch (err) {
-        console.log("Notification Preferences Error : ", err);
-        return res.status(500).json({ success: false, message: "Server Error : Failed to update preferences" });
-    }
-})
 
 userRouter.post('/get-location-from-coords', userAuth, async (req, res) => {
     try {
         const { lat, lng } = req.body;
 
-        if (!lat || !lng) {
+        if (lat === undefined || lng === undefined) {
             return res.status(400).json({
                 success: false,
                 message: "Latitude and Longitude required"
@@ -536,5 +511,97 @@ userRouter.post('/get-location-from-coords', userAuth, async (req, res) => {
         });
     }
 });
+
+userRouter.patch('/me/preferences/notification', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { enableNotification } = req.body;
+        if (typeof enableNotification !== 'boolean') {
+            return res.status(400).json({ success: false, message: "Invalid preference value" });
+        }
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: { 'preferences.globalNotifications': enableNotification } },
+            { new: true }
+        ).select('preferences');
+
+        return res.status(200).json(
+            {
+                success: true,
+                message: "Notification preferences updated",
+                data: updatedUser.preferences
+            }
+        )
+    }
+    catch (err) {
+        console.log("Notification Preferences Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Failed to update preferences" });
+    }
+})
+
+// ==========================================
+// NOTIFICATION ROUTES
+// ==========================================
+
+/**
+ * GET /me/notifications
+ * Fetches the user's notification history for the dropdown panel
+ */
+userRouter.get('/me/notifications', userAuth, async (req, res) => {
+    try {
+        // Basic pagination to keep the payload light
+        const { page = 1, limit = 20 } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const notifications = await Notification.find({ recipient: req.userId })
+            .sort({ createdAt: -1 }) // Show newest first
+            .skip(skip)
+            .limit(parseInt(limit))
+            // Populate sender details so you can show their avatar next to the message
+            .populate('sender', 'name userName profilePic')
+            // Populate issue details so you can link directly to the issue page
+            .populate('issue', 'title status');
+
+        // Get the total number of unread alerts for the red bell badge
+        const unreadCount = await Notification.countDocuments({
+            recipient: req.userId,
+            isRead: false
+        });
+
+        return res.status(200).json({
+            success: true,
+            unreadCount,
+            data: notifications
+        });
+
+    } catch (err) {
+        console.error("Fetch notifications error:", err);
+        return res.status(500).json({ success: false, message: "Error fetching notifications" });
+    }
+});
+
+/**
+ * PATCH /me/notifications/read
+ * Marks all of the user's unread notifications as "read"
+ */
+userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
+    try {
+        // Find all unread notifications for this specific user and turn them to true
+        await Notification.updateMany(
+            { recipient: req.userId, isRead: false },
+            { $set: { isRead: true } }
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: "Notifications marked as read"
+        });
+
+    } catch (err) {
+        console.error("Update notifications error:", err);
+        return res.status(500).json({ success: false, message: "Error updating notifications" });
+    }
+});
+
 
 module.exports = userRouter;
