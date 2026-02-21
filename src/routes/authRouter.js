@@ -349,12 +349,12 @@ authRouter.get(
          */
         const accessToken = generateAccessToken(req.user._id);
         const refreshToken = generateRefreshToken(req.user._id);
-
+        const EXPIRY_LIMIT = 3 * 60 * 1000
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
             sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax',
-            maxAge: "3m"
+            maxAge: EXPIRY_LIMIT
         })
         if (!req.user.isProfileComplete) {
             return res.redirect(
