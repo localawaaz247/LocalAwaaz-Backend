@@ -40,19 +40,19 @@ const validateLocalSignupData = (req) => {
     // if (mobile && !validate.isMobilePhone(mobile, 'any')) {
     //     throw new Error('Enter valid Mobile Number');
     // }
-    if (!country) {
-        throw new Error('Select Country');
-    }
-    if (!state) {
-        throw new Error('Select State');
-    }
-    if (!city) {
-        throw new Error('Enter city');
-    }
-    if (!pinCode) {
-        throw new Error('Enter PinCode');
-    }
-    if (!validate.isPostalCode(pinCode.toString(), 'IN')) {
+    // if (!country) {
+    //     throw new Error('Select Country');
+    // }
+    // if (!state) {
+    //     throw new Error('Select State');
+    // }
+    // if (!city) {
+    //     throw new Error('Enter city');
+    // }
+    // if (!pinCode) {
+    //     throw new Error('Enter PinCode');
+    // }
+    if (pinCode && !validate.isPostalCode(pinCode.toString(), 'IN')) {
         throw new Error('Enter Valid PinCode');
     }
     return true;

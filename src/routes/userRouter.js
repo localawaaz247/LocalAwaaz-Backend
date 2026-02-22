@@ -107,16 +107,16 @@ userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
         }
 
         // Update missing / editable fields
-        user.userName = userName;
-        user.gender = gender;
+        user?.userName = userName;
+        user?.gender = gender;
         // user.contact.mobile = mobile;
-        user.contact.country = country;
-        user.contact.state = state;
-        user.contact.city = city;
-        user.contact.pinCode = pinCode;
+        user?.contact?.country = country;
+        user?.contact?.state = state;
+        user?.contact?.city = city;
+        user?.contact?.pinCode = pinCode;
 
         // Mark profile as completed
-        user.isProfileComplete = true;
+        user?.isProfileComplete = true;
 
         await user.save();
 
