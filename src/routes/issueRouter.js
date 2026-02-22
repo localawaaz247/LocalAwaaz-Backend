@@ -30,24 +30,27 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
         const { search } = req.query;
         if (!search) return res.status(400).json({ success: false, message: "Search term required" });
 
-        const searchTerm = search.trim();
+        // 1. Split the search term by commas or spaces into an array of words
+        // e.g., "Ahimane, Sultanpur" -> ["Ahimane", "Sultanpur"]
+        const searchTokens = search.trim().split(/[\s,]+/).filter(Boolean);
 
-        // Only searching for public and non-deleted issues
+        // 2. Create a regex for each word
+        const regexArray = searchTokens.map(token => new RegExp(token, 'i'));
+
+        // 3. Search for ANY of the tokens in your location fields
         const query = {
             isPublic: true,
             isDeleted: false,
             $or: [
-                { 'location.city': { $regex: searchTerm, $options: 'i' } },
-                { 'location.pinCode': searchTerm }
+                { 'location.city': { $in: regexArray } },
+                { 'location.pinCode': { $in: regexArray } }
             ]
         };
 
-        // 1. Select only the fields useful for an area feed
-        // 2. Populate the reportedBy field to get the user's name/avatar (if not anonymous)
         const issues = await Issue.find(query)
             .select('-statusHistory')
-            .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email '); 
-            
+            .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email ');
+
         if (!issues || issues.length === 0) {
             return res.status(200).json({
                 success: true,
@@ -56,12 +59,10 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
                 issueCount: 0
             });
         }
-        
-        // 3. Filter data based on the isAnonymous flag and attach explicit date
+
+        // --- Your existing mapping logic stays the same below ---
         const sanitizedIssues = issues.map((issue) => {
             const issueObj = issue.toObject();
-            
-            // Explicitly pass the RAW date to a new key
             issueObj.dateOfFormation = issueObj.createdAt;
 
             if (issueObj.isAnonymous) {
@@ -77,16 +78,15 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
                 }
             }
             return issueObj;
-        })
-        
-        return res.status(200).json(
-            {
-                success: true,
-                message: "Issues found for this area",
-                issueCount: sanitizedIssues.length,
-                data: sanitizedIssues
-            }
-        );
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Issues found for this area",
+            issueCount: sanitizedIssues.length,
+            data: sanitizedIssues
+        });
+
     } catch (err) {
         console.error('Search Error:', err);
         return res.status(500).json({ success: false, message: 'Server Error in Searching' });

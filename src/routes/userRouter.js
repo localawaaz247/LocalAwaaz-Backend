@@ -661,40 +661,58 @@ userRouter.get('/locations', async (req, res) => {
     }
 
     try {
-        // 1. Smart Routing: Check if the user typed exactly a 6-digit Indian Pincode
         const isPincode = /^\d{6}$/.test(keyword.trim());
-
-        // 2. Point to the correct endpoint based on what they typed
         const url = isPincode
             ? `https://api.postalpincode.in/pincode/${keyword}`
             : `https://api.postalpincode.in/postoffice/${keyword}`;
 
         const response = await axios.get(url);
-
-        // The API wraps its response inside an array, so we grab the first item
         const data = response.data[0];
 
-        // 3. Handle "No Results" gracefully
         if (data.Status === "Error" || !data.PostOffice) {
-            return res.json([]); // Return empty array so your frontend doesn't crash
+            return res.json([]);
         }
 
-        // 4. Map, Filter, and Limit the results
-        const results = data.PostOffice.map(place => ({
+        // --- THE FIX: Smart Sorting Strategy ---
+        const sortedPostOffices = data.PostOffice.sort((a, b) => {
+            const keywordLower = keyword.toLowerCase();
+            const nameA = a.Name.toLowerCase();
+            const nameB = b.Name.toLowerCase();
+
+            // 1. If searching by text, prioritize exact matches first (e.g., "Sultanpur")
+            if (!isPincode) {
+                if (nameA === keywordLower && nameB !== keywordLower) return -1;
+                if (nameB === keywordLower && nameA !== keywordLower) return 1;
+            }
+
+            // 2. Prioritize Head Post Offices (Main Cities/Districts)
+            if (a.BranchType === 'Head Post Office' && b.BranchType !== 'Head Post Office') return -1;
+            if (b.BranchType === 'Head Post Office' && a.BranchType !== 'Head Post Office') return 1;
+
+            // 3. Prioritize locations where the Name matches the District (e.g., Name: Sultanpur, District: Sultanpur)
+            if (nameA === a.District?.toLowerCase() && nameB !== b.District?.toLowerCase()) return -1;
+            if (nameB === b.District?.toLowerCase() && nameA !== a.District?.toLowerCase()) return 1;
+
+            // 4. Prioritize Sub Post Offices over rural Branch Post Offices
+            if (a.BranchType === 'Sub Post Office' && b.BranchType === 'Branch Post Office') return -1;
+            if (b.BranchType === 'Sub Post Office' && a.BranchType === 'Branch Post Office') return 1;
+
+            return 0;
+        });
+
+        // Map, Filter, and Limit the sorted results
+        const results = sortedPostOffices.map(place => ({
             name: place.Name,
             district: place.District || 'N/A',
             state: place.State || 'N/A',
-            // The API sometimes drops the PIN in text searches, so we fall back gracefully
             pincode: place.PINCode || (isPincode ? keyword : 'N/A'),
             fullAddress: `${place.Name}, ${place.District}, ${place.State}`
         }))
-            // Remove exact duplicates (India Post sometimes lists the same office multiple times)
             .filter((value, index, self) =>
                 index === self.findIndex((t) => (
                     t.name === value.name && t.district === value.district
                 ))
             )
-            // Strictly limit to 5 results
             .slice(0, 5);
 
         return res.json({ success: true, message: "Matched locations are here...", data: results });
