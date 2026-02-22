@@ -172,7 +172,10 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
                 }
             },
             {
-                $unwind: '$authorDetails'
+                $unwind: {
+                    path: '$authorDetails',
+                    preserveNullAndEmptyArrays: true
+                }
             },
             {
                 $project: {
@@ -190,31 +193,42 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
                     isAnonymous: 1,
 
                     // CONDITIONAL AUTHOR DISPLAY
-                    author: {
+                    reportedBy: {
                         $cond: {
                             if: { $eq: ["$isAnonymous", true] },
                             // CASE A: Anonymous -> Mask Data
                             then: {
                                 name: "Anonymous Citizen",
-                                userName: "Hidden",
-                                profilePic: "https://res.cloudinary.com/your-cloud-name/image/upload/v1/assets/anonymous_avatar.png", // Use a generic placeholder
-                                civilScore: null,
-                                _id: null // Hide ID to prevent tracking
+                                userName: "active_citizen",
+                                civilScore: 10,
+                                issuesReported: 0,
+                                issuesConfirmed: 0,
+                                contact: { email: "hidden@localawaaz.in" },
+                                profilePic: null,
+                                isAnonymous: true
                             },
                             // CASE B: Public -> Show Data
                             else: {
                                 name: "$authorDetails.name",
                                 userName: "$authorDetails.userName",
-                                profilePic: "$authorDetails.profilePic",
                                 civilScore: "$authorDetails.civilScore",
-                                _id: "$authorDetails._id"
+                                issuesReported: "$authorDetails.issuesReported",
+                                issuesConfirmed: "$authorDetails.issuesConfirmed",
+                                contact: { email: "$authorDetails.contact.email" },
+                                profilePic: "$authorDetails.profilePic",
+                                isAnonymous: false
                             }
                         }
                     }
                 }
             }
         ]);
-        return res.status(200).json({ success: true, message: "Feed Updated Successfully", count: issues.length, data: issues });
+        return res.status(200).json({
+            success: true,
+            message: issues.length > 0 ? "Feed Updated Successfully" : "No issues found nearby",
+            count: issues.length,
+            data: issues
+        });
     }
     catch (err) {
         console.log("Feed error", err);
@@ -353,8 +367,29 @@ userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
                 .sort({ createdAt: -1 }) // Newest first
                 .skip(skip)
                 .limit(limitNum)
-            // We don't need to populate 'reportedBy' because we know it's the user
+                .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email')
         ]);
+        const finalData = issues.map(issue => {
+            const issueObj = issue.toObject();
+
+            // Explicitly pass the RAW date to a new key, if you prefer not to just use issueObj.createdAt
+            issueObj.dateOfFormation = issueObj.createdAt;
+
+            // Privacy Masking
+            if (issueObj.isAnonymous) {
+                issueObj.reportedBy = {
+                    name: "Anonymous Citizen",
+                    userName: "active_citizen",
+                    civilScore: 10,
+                    issuesReported: 0,
+                    issuesConfirmed: 0,
+                    contact: { email: "hidden@localawaaz.in" },
+                    profilePic: null,
+                    isAnonymous: true
+                };
+            }
+            return issueObj;
+        });
         return res.status(200).json({
             success: true,
             message: "User issues fetched successfully",
@@ -362,7 +397,7 @@ userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
             total: totalIssues, // Useful for frontend pagination (e.g., "Page 1 of 5")
             currentPage: pageNum,
             totalPages: Math.ceil(totalIssues / limitNum),
-            data: issues
+            data: finalData
         });
     }
     catch (err) {
@@ -409,7 +444,10 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
             },
             {
                 // STEP D: Flatten the author array
-                $unwind: '$authorDetails'
+                $unwind: {
+                    path: '$authorDetails',
+                    preserveNullAndEmptyArrays: true
+                }
             },
             {
                 // STEP E: Project the exact same fields as your Feed API
@@ -424,27 +462,35 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
                     impactScore: 1,
                     confirmationCount: 1,
                     createdAt: 1,
+                    dateOfFormation: "$createdAt", // Added this to pass the raw date explicitly
                     isAnonymous: 1,
 
                     // CONDITIONAL AUTHOR DISPLAY (Exact match to your feed)
-                    author: {
+                    reportedBy: {
                         $cond: {
                             if: { $eq: ["$isAnonymous", true] },
                             // CASE A: Anonymous -> Mask Data
                             then: {
                                 name: "Anonymous Citizen",
-                                userName: "Hidden",
-                                profilePic: "https://res.cloudinary.com/your-cloud-name/image/upload/v1/assets/anonymous_avatar.png",
-                                civilScore: null,
-                                _id: null
+                                userName: "active_citizen",
+                                civilScore: 10,
+                                issuesReported: 0,
+                                issuesConfirmed: 0,
+                                contact: { email: "hidden@localawaaz.in" },
+                                profilePic: null,
+                                isAnonymous: true
                             },
                             // CASE B: Public -> Show Data
                             else: {
+                                _id: "$authorDetails._id",
                                 name: "$authorDetails.name",
                                 userName: "$authorDetails.userName",
-                                profilePic: "$authorDetails.profilePic",
                                 civilScore: "$authorDetails.civilScore",
-                                _id: "$authorDetails._id"
+                                issuesReported: "$authorDetails.issuesReported",
+                                issuesConfirmed: "$authorDetails.issuesConfirmed",
+                                contact: { email: "$authorDetails.contact.email" },
+                                profilePic: "$authorDetails.profilePic",
+                                isAnonymous: false
                             }
                         }
                     }
@@ -454,7 +500,7 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
 
         return res.status(200).json({
             success: true,
-            message: "Confirmed Issues Fetched Successfully",
+            message: issues.length > 0 ? "Confirmed Issues Fetched Successfully" : "No confirmed issues found",
             count: issues.length,
             data: issues
         });
@@ -658,6 +704,149 @@ userRouter.get('/locations', async (req, res) => {
         return res.status(500).json({ error: 'Failed to fetch location data' });
     }
 });
+
+userRouter.post('/save-issue/:id', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const { id } = req.params;
+        const issueId = id;
+        if (!mongoose.Types.ObjectId.isValid(issueId)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue Id" });
+        }
+        const issueExists = await Issue.exists({ _id: issueId, isDeleted: false });
+        if (!issueExists) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $addToSet: { savedIssues: issueId } },
+            { new: true }
+        );
+        return res.status(200).json(
+            {
+                success: true,
+                message: "Issue Saved Successfully",
+                savedIssues: user.savedIssues
+            }
+        )
+    }
+    catch (err) {
+        console.log("Server Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Issue can't be saved" });
+    }
+})
+
+userRouter.get('/saved-issues', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const user = await User.findById(userId).populate({
+            path: 'savedIssues',
+            match: { isDeleted: false },
+            populate: {
+                path: 'reportedBy',
+                select: 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email'
+            }
+        });
+        if (!user) {
+            return res.status(200).json(
+                {
+                    success: true, message: "No saved Issue found",
+                    savedIssues: []
+                }
+            );
+        }
+        const sanitizedIssues = user.savedIssues
+            .filter(issue => issue !== null)
+            .map(issue => {
+                const issueObj = issue.toObject();
+
+                // Added this to pass the raw date explicitly
+                issueObj.dateOfFormation = issueObj.createdAt;
+
+                if (issueObj.isAnonymous) {
+                    issueObj.reportedBy = {
+                        name: "Anonymous Citizen",
+                        userName: "active_citizen",
+                        civilScore: 10,
+                        issuesReported: 0,
+                        issuesConfirmed: 0,
+                        contact: { email: "hidden@localawaaz.in" },
+                        profilePic: null,
+                        isAnonymous: true
+                    };
+                };
+                return issueObj;
+            })
+        return res.status(200).json(
+            {
+                success: true,
+                message: sanitizedIssues.length > 0 ? "Saved issues retrieved" : "No saved issues found",
+                count: sanitizedIssues.length,
+                savedIssues: sanitizedIssues
+            });
+    }
+    catch (err) {
+        console.log("Server Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Can't get saved Issues" });
+    }
+})
+
+userRouter.delete('/remove/saved-issue/:id', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+        const issueId = req.params.id;
+        if (!mongoose.Types.ObjectId.isValid(issueId)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue Id" });
+        }
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $pull: { savedIssues: issueId } }, // $pull removes all instances of this value from the array
+            { new: true } // Returns the updated user document
+        );
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+        return res.status(200).json({
+            success: true,
+            message: "Issue removed from saved list",
+            savedIssues: user.savedIssues
+        });
+
+    }
+    catch (err) {
+        console.log("Remove Saved Issue Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Could not remove saved issue" })
+    }
+
+})
+
+userRouter.delete('/saved-issues/clear', userAuth, profileAuth, async (req, res) => {
+    try {
+        const { userId } = req;
+
+        // Directly set the array to empty
+        const user = await User.findByIdAndUpdate(
+            userId,
+            { $set: { savedIssues: [] } },
+            { new: true }
+        );
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "All saved issues cleared successfully",
+            savedIssues: user.savedIssues // This will safely return [] to your frontend
+        });
+
+    } catch (err) {
+        console.error("Clear All Saved Issues Error : ", err);
+        return res.status(500).json({ success: false, message: "Server Error : Could not clear saved issues" });
+    }
+
+})
 
 
 module.exports = userRouter;

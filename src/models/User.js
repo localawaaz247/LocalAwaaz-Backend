@@ -191,7 +191,14 @@ const userSchema = new mongoose.Schema({
             type: Boolean,
             default: true // Users are opted-in by default
         }
-    }
+    },
+    /**
+     * Save the Issues for later view
+     */
+    savedIssues: [{
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Issue'
+    }]
 },
     {
         // Automatically adds createdAt & updatedAt

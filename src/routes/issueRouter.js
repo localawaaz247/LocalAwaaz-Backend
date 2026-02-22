@@ -45,26 +45,48 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
         // 1. Select only the fields useful for an area feed
         // 2. Populate the reportedBy field to get the user's name/avatar (if not anonymous)
         const issues = await Issue.find(query)
-            .select('title description category location.city location.pinCode status isAnonymous reportedBy media priority impactScore confirmationCount')
-            .populate('reportedBy', 'name avatar'); // Adjust 'name avatar' based on your User schema
-
-        // 3. Filter data based on the isAnonymous flag
-        const sanitizedIssues = issues.map(issue => {
+            .select('-statusHistory')
+            .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email '); 
+            
+        if (!issues || issues.length === 0) {
+            return res.status(200).json({
+                success: true,
+                message: "No issues found in this area",
+                data: [],
+                issueCount: 0
+            });
+        }
+        
+        // 3. Filter data based on the isAnonymous flag and attach explicit date
+        const sanitizedIssues = issues.map((issue) => {
             const issueObj = issue.toObject();
+            
+            // Explicitly pass the RAW date to a new key
+            issueObj.dateOfFormation = issueObj.createdAt;
 
             if (issueObj.isAnonymous) {
-                // Completely remove the reporter's info if anonymous
-                delete issueObj.reportedBy;
+                issueObj.reportedBy = {
+                    name: "Anonymous Citizen",
+                    userName: "active_citizen",
+                    civilScore: 10,
+                    issuesReported: 0,
+                    issuesConfirmed: 0,
+                    contact: { email: "hidden@localawaaz.in" },
+                    profilePic: null,
+                    isAnonymous: true
+                }
             }
-
             return issueObj;
-        });
-
-        return res.status(200).json({
-            success: true,
-            issueCount: sanitizedIssues.length,
-            data: sanitizedIssues
-        });
+        })
+        
+        return res.status(200).json(
+            {
+                success: true,
+                message: "Issues found for this area",
+                issueCount: sanitizedIssues.length,
+                data: sanitizedIssues
+            }
+        );
     } catch (err) {
         console.error('Search Error:', err);
         return res.status(500).json({ success: false, message: 'Server Error in Searching' });
@@ -187,34 +209,40 @@ issueRouter.get('/issue/:id', userAuth, async (req, res) => {
         const issueRecord = await Issue.findOne({
             _id: id,
             isDeleted: false
-        }).populate('reportedBy', 'name userName profilePic civilScore');
+        }).populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email ');
 
         if (!issueRecord) {
-            return res.status(404).json({ success: false, message: "Issue not found" });
+            return res.status(404).json({ // Use 404 for 'Not Found'
+                success: false,
+                message: "Issue not found"
+            });
         }
 
         // 3. ENHANCEMENT: Handle the "isAnonymous" masking for the single issue view
         // We convert the Mongoose document to a plain JS object so we can modify it safely
         let responseData = issueRecord.toObject();
 
-        if (responseData.isAnonymous) {
-            responseData.author = {
-                name: "Anonymous Citizen",
-                userName: "Hidden",
-                profilePic: "https://res.cloudinary.com/your-cloud-name/image/upload/v1/assets/anonymous_avatar.png",
-                civilScore: null,
-                _id: null
-            };
-        } else {
-            responseData.author = responseData.reportedBy;
-        }
+        // Explicitly pass the RAW date to a new key
+        responseData.dateOfFormation = responseData.createdAt;
 
-        // Remove the original reportedBy object so we don't leak the true identity
-        delete responseData.reportedBy;
+        if (responseData.isAnonymous) {
+            responseData.reportedBy = {
+                name: "Anonymous Citizen",
+                userName: "active_citizen",
+                civilScore: 10,
+                issuesReported: 0,
+                issuesConfirmed: 0,
+                contact: { // Keep the nested structure consistent with your Schema
+                    email: "hidden@localawaaz.in"
+                },
+                profilePic: null,
+                isAnonymous: true
+            };
+        }
 
         return res.status(200).json({
             success: true,
-            message: "Issue found",
+            message: "Issue details retreived",
             data: responseData
         });
 
