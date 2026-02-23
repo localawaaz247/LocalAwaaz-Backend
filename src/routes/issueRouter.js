@@ -23,7 +23,6 @@ const TempMedia = require('../models/TempMedia');
 const triggerNotification = require('../utils/notificationService');
 const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const s3 = require('../config/s3Client')
-
 //GET issues according to City and Pincode
 issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
     try {
@@ -43,6 +42,7 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
             isDeleted: false,
             $or: [
                 { 'location.city': { $in: regexArray } },
+                { 'location.address': { $in: regexArray } },
                 { 'location.pinCode': { $in: regexArray } }
             ]
         };
@@ -105,12 +105,18 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
 
         // Validation (Strict)
         checkIssueCreation(req);
-        const { title, category, description, location, media, isAnonymous } = req.body;
 
-        // 2. Fetch User (Pass the session!)
+        // --- CHANGE 1: Extract uploadToken instead of media array ---
+        const { title, category, description, location, isAnonymous, uploadToken } = req.body;
+
+        if (!uploadToken) {
+            throw new Error('At least one media file must be uploaded before creating an issue.');
+        }
+
+        // 2. Fetch User
         const user = await User.findById(userId).session(session);
         if (!user) {
-            throw new Error('User not found'); // Throws to the catch block to abort transaction
+            throw new Error('User not found');
         }
         if (!user.isEmailVerified) {
             throw new Error('Verify email before posting');
@@ -140,14 +146,24 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }
         };
 
-        // 4. Format Media Array to match Schema requirements
-        // Handles an array of strings OR an array of objects from the frontend
-        const formattedMedia = Array.isArray(media)
-            ? media.map(m => ({ url: m.publicUrl || m.url || m }))
-            : [];
+        // --- CHANGE 2: Check TempMedia for parked background data ---
+        // Pass the session here so it stays within the transaction safety net
+        const parkedData = await TempMedia.find({ uploadToken }).session(session);
+
+        let readyUrls = [];
+        let isMediaFailed = false;
+
+        if (parkedData.length > 0) {
+            // Check if ANY of the parked records flagged a failure
+            const errorRecord = parkedData.find(p => p.mediaFailed === true);
+            if (errorRecord) {
+                isMediaFailed = true;
+            } else {
+                readyUrls = parkedData.filter(p => p.url).map(p => ({ url: p.url }));
+            }
+        }
 
         // 5. Create Issue
-        // CRITICAL Mongoose Trap: When using sessions, Issue.create MUST take an array of objects.
         const [newIssue] = await Issue.create([{
             reportedBy: userId,
             title: title.trim(),
@@ -156,7 +172,13 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             description: description.trim(),
             location: issueLocation,
             priority,
-            media: formattedMedia,
+
+            // --- Apply the Async Fields ---
+            uploadToken: uploadToken,
+            media: readyUrls,
+            mediaFailed: isMediaFailed, // Set the flag
+            mediaProcessing: parkedData.length === 0, // If empty, the worker is still compressing!
+
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
@@ -165,20 +187,19 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }]
         }], { session });
 
-        // 6. Update User Score
         await User.findByIdAndUpdate(userId, {
             $inc: { issuesReported: 1, civilScore: 20 }
         }, { session });
 
-        // 7. Commit the Transaction (Saves everything to the database permanently)
+        // --- CHANGE 4: Cleanup TempMedia by Token instead of Keys ---
+        if (parkedData.length > 0) {
+            await TempMedia.deleteMany({ uploadToken }).session(session);
+        }
+
+        // 7. Commit the Transaction
         await session.commitTransaction();
-        const mediaKeys = formattedMedia.map(m => {
-            // Extract just the filename from the end of the publicUrl
-            return m.url.split('/').pop();
-        });
         session.endSession();
 
-        await TempMedia.deleteMany({ r2Key: { $in: mediaKeys } });
         return res.status(201).json({
             success: true,
             message: "Your Issue has been recorded",
@@ -191,7 +212,14 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         session.endSession();
 
         // Differentiate between our custom errors and server crashes
-        const statusCode = err.message === 'User not found' || err.message === 'Verify email before posting' ? 400 : 500;
+        const customErrors = [
+            'User not found',
+            'Verify email before posting',
+            'At least one media file must be uploaded before creating an issue.'
+        ];
+        const statusCode = customErrors.includes(err.message) ? 400 : 500;
+
+        console.error('Issue Creation Error:', err.message);
         return res.status(statusCode).json({ success: false, message: err.message });
     }
 });
@@ -259,15 +287,15 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
-        const allowedUpdates = ['title', 'category', 'description', 'location', 'media'];
+
+        // --- CHANGE 1: Added 'uploadToken' to allowed updates ---
+        const allowedUpdates = ['title', 'category', 'description', 'location', 'media', 'uploadToken'];
+        checkIssueUpdates(req);
 
         // 1. Validate ID
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Issue Id format" });
         }
-
-        // 2. Validate Body (Partial)
-        checkIssueUpdates(req);
 
         const issue = await Issue.findById(id);
 
@@ -315,9 +343,9 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             issue.category = upperCat;
         }
 
-        // 4. Update Loop (Changed to for...of to support async/await operations)
+        // 4. Update Loop
         for (const field of updates) {
-            if (field === 'category') continue;
+            if (field === 'category' || field === 'uploadToken') continue; // Handle token separately at the end
 
             if (field === 'location') {
                 const newLoc = req.body.location;
@@ -337,27 +365,21 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             else if (field === 'title' || field === 'description') {
                 issue[field] = req.body[field].trim();
             }
-            // --- NEW: Handle Media Array & Garbage Collection ---
+            // --- Handle Deletions of Existing Media ---
             else if (field === 'media') {
                 if (Array.isArray(req.body.media)) {
-                    // Grab old keys before overwriting
                     const oldMediaKeys = issue.media.map(m => m.url.split('/').pop());
 
-                    // Format and apply new media array
+                    // Keep only the media the user didn't delete
                     issue.media = req.body.media.map(item => {
                         const stringUrl = typeof item === 'object' ? (item.url || item.publicUrl) : item;
                         return { url: stringUrl };
                     });
 
-                    // Grab new keys
                     const newMediaKeys = issue.media.map(m => m.url.split('/').pop());
 
-                    // CLAIM NEW MEDIA: Remove newly uploaded files from TempMedia so they aren't deleted tonight
-                    await TempMedia.deleteMany({ r2Key: { $in: newMediaKeys } });
-
-                    // DELETE REMOVED MEDIA: Find files the user deleted and nuke them from Cloudflare
+                    // DELETE REMOVED MEDIA FROM CLOUDFLARE
                     const keysToDelete = oldMediaKeys.filter(key => !newMediaKeys.includes(key));
-
                     for (const key of keysToDelete) {
                         try {
                             const command = new DeleteObjectCommand({
@@ -374,6 +396,31 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             }
             else {
                 issue[field] = req.body[field];
+            }
+        }
+
+        // --- CHANGE 2: Handle NEW media added during edit ---
+        if (updates.includes('uploadToken') && req.body.uploadToken) {
+            const token = req.body.uploadToken;
+            issue.uploadToken = token; // Attach the new token so the worker can find this issue!
+
+            const parkedData = await TempMedia.find({ uploadToken: token });
+
+            if (parkedData.length > 0) {
+                // The worker already finished before the user hit "Save"
+                const errorRecord = parkedData.find(p => p.mediaFailed === true);
+                if (errorRecord) {
+                    issue.mediaFailed = true;
+                } else {
+                    const readyUrls = parkedData.filter(p => p.url).map(p => ({ url: p.url }));
+                    issue.media.push(...readyUrls); // Append new media to existing media
+                }
+                await TempMedia.deleteMany({ uploadToken: token });
+                issue.mediaProcessing = false;
+            } else {
+                // The worker is still actively processing the new files
+                issue.mediaProcessing = true;
+                issue.mediaFailed = false;
             }
         }
 

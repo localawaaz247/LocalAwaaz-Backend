@@ -1,196 +1,124 @@
 const express = require('express');
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
-const crypto = require("crypto");
 const multer = require('multer');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-const sharp = require('sharp');
-const fs = require('fs');
+const crypto = require("crypto");
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
-const TempMedia = require('../models/TempMedia');
-
-ffmpeg.setFfmpegPath(ffmpegPath);
+const { mediaQueue } = require('../workers/queue');
+const Issue = require('../models/Issue');
 
 const mediaRouter = express.Router();
 
-const s3 = new S3Client({
-    region: "auto",
-    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-    credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID,
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
-    },
-});
-
-// Enforces the 150MB raw limit directly at the upload level
 const upload = multer({
     dest: 'temp_uploads/',
-    limits: { fileSize: 150 * 1024 * 1024 }
+    limits: { fileSize: 100 * 1024 * 1024 } // 100MB raw limit per file
 });
 
-const MAX_TOTAL_BYTES = 30 * 1024 * 1024;
-
-const compressVideo = (inputPath, outputPath) => {
-    return new Promise((resolve, reject) => {
-        ffmpeg(inputPath)
-            .output(outputPath)
-            .videoCodec('libx264')
-            .videoFilters("scale='min(1280,iw)':'min(1280,ih)':force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2")
-            .audioCodec('aac')
-            .audioBitrate('128k')
-            .outputOptions([
-                '-preset veryfast',
-                '-crf 28',
-                '-maxrate 2500k',
-                '-bufsize 5000k',
-                '-movflags +faststart'
-            ])
-            .on('end', () => resolve(outputPath))
-            .on('error', (err) => {
-                console.error('FFmpeg compression failed:', err);
-                reject(err);
-            })
-            .run();
-    });
-};
-
-const compressImage = async (inputPath, outputPath) => {
-    await sharp(inputPath)
-        .resize({ width: 1280, withoutEnlargement: true })
-        .jpeg({ quality: 70 })
-        .toFile(outputPath);
-};
-
-// 1. Extract the multer middleware
 const uploadMiddleware = upload.array('issue_media', 3);
 
-// 2. Wrap it with our custom error handler to prevent HTML crash pages
 mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
     uploadMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({
-                    success: false,
-                    message: "A file exceeds the 150MB raw upload limit"
-                });
+                return res.status(400).json({ success: false, message: "A file exceeds the 100MB raw upload limit." });
+            }
+            if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+                return res.status(400).json({ success: false, message: "Maximum 3 media files allowed." });
             }
             return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
         } else if (err) {
             return res.status(500).json({ success: false, message: err.message });
         }
-        next(); // Proceed to the main handler if no error
+        next();
     });
 }, async (req, res) => {
-    req.setTimeout(600000);
-
     try {
         let files = req.files;
+
+        // --- Enforce Minimum 1 File ---
         if (!files || files.length === 0) {
-            return res.status(400).json({ success: false, message: "No media attached." });
+            return res.status(400).json({ success: false, message: "At least one media file is required." });
         }
 
-        let initialSize = files.reduce((acc, file) => acc + file.size, 0);
-        let manualFinalSize = 0;
+        // --- Generate the Token ---
+        const uploadToken = crypto.randomUUID();
 
-        if (initialSize > MAX_TOTAL_BYTES) {
-            for (let i = 0; i < files.length; i++) {
-                const file = files[i];
-                const inputPath = file.path;
-                const ext = file.originalname.split('.').pop().toLowerCase();
-
-                const isVideo = file.mimetype.startsWith('video/') || ['mp4', 'mov', 'avi', 'mkv'].includes(ext);
-                const isImage = file.mimetype.startsWith('image/') || ['jpg', 'jpeg', 'png', 'webp'].includes(ext);
-
-                if (isVideo) {
-                    const outputPath = `${inputPath}_compressed.mp4`;
-
-                    try {
-                        await compressVideo(inputPath, outputPath);
-                        const newStats = fs.statSync(outputPath);
-
-                        files[i].path = outputPath;
-                        files[i].size = newStats.size;
-                        files[i].mimetype = 'video/mp4';
-                        files[i].originalname = file.originalname.replace(/\.[^/.]+$/, ".mp4");
-                        manualFinalSize += newStats.size;
-
-                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                    } catch (err) {
-                        manualFinalSize += file.size;
-                    }
-                } else if (isImage) {
-                    const outputPath = `${inputPath}_compressed.jpg`;
-
-                    try {
-                        await compressImage(inputPath, outputPath);
-                        const newStats = fs.statSync(outputPath);
-
-                        files[i].path = outputPath;
-                        files[i].size = newStats.size;
-                        files[i].mimetype = 'image/jpeg';
-                        files[i].originalname = file.originalname.replace(/\.[^/.]+$/, ".jpg");
-                        manualFinalSize += newStats.size;
-
-                        if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-                    } catch (err) {
-                        manualFinalSize += file.size;
-                    }
-                } else {
-                    manualFinalSize += file.size;
-                }
-            }
-        } else {
-            manualFinalSize = initialSize;
-        }
-
-        if (manualFinalSize > MAX_TOTAL_BYTES) {
-            files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path) });
-            return res.status(400).json({
-                success: false,
-                message: `Total size exceeds the 30MB limit after processing.`
-            });
-        }
-
-        const uploadedMediaData = await Promise.all(files.map(async (file) => {
-            const safeName = file.originalname.replace(/\s+/g, '-');
-            const uniqueFileName = `${crypto.randomUUID()}-${safeName}`;
-            const fileStream = fs.createReadStream(file.path);
-
-            const command = new PutObjectCommand({
-                Bucket: process.env.R2_BUCKET_NAME,
-                Key: uniqueFileName,
-                Body: fileStream,
-                ContentType: file.mimetype,
-            });
-
-            await s3.send(command);
-
-            // Logs to TempMedia for the Garbage Collector
-            await TempMedia.create({ r2Key: uniqueFileName });
-
-            return {
-                publicUrl: `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`,
-                originalName: file.originalname
-            };
+        const filesData = files.map(file => ({
+            path: file.path,
+            originalname: file.originalname,
+            mimetype: file.mimetype,
+            size: file.size
         }));
 
-        files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path) });
+        // --- Queue the Job ---
+        await mediaQueue.add('compress-and-upload', {
+            uploadToken: uploadToken,
+            userId: req.userId,
+            files: filesData
+        });
 
+        // --- Return Token Instantly ---
         return res.status(200).json({
             success: true,
-            message: "Media processed and uploaded successfully.",
-            data: uploadedMediaData
+            message: "Media received and processing in the background.",
+            uploadToken: uploadToken // Frontend must send this to /create-issue
         });
 
     } catch (error) {
-        console.error("Server error during media upload:", error);
+        console.error("Upload error:", error);
+        return res.status(500).json({ success: false, message: "Internal server error." });
+    }
+});
 
-        if (req.files) {
-            req.files.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path) });
+// --- RE-UPLOAD FAILED MEDIA ROUTE ---
+mediaRouter.post('/reupload-media/:id', userAuth, upload.array('issue_media', 5), async (req, res) => {
+    try {
+        const issueId = req.params.id;
+
+        // 1. Find the failed issue
+        const issue = await Issue.findById(issueId);
+        if (!issue) {
+            return res.status(404).json({ success: false, message: "Issue not found." });
         }
 
-        return res.status(500).json({ success: false, message: "An internal server error occurred." });
+        // 2. Security Check: Did it actually fail?
+        if (!issue.mediaFailed) {
+            return res.status(400).json({ success: false, message: "This issue does not need a media re-upload." });
+        }
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, message: "No new media provided for re-upload." });
+        }
+
+        // 3. Prepare files for the worker
+        const filesToProcess = req.files.map(file => ({
+            path: file.path,
+            originalname: file.originalname,
+            mimetype: file.mimetype,
+            size: file.size
+        }));
+
+        // 4. Reset the database flags immediately
+        issue.mediaProcessing = true;
+        issue.mediaFailed = false;
+        await issue.save();
+
+        // 5. Throw it back into BullMQ using the ORIGINAL token!
+        await mediaQueue.add('media-processing', {
+            uploadToken: issue.uploadToken,
+            userId: issue.reportedBy || req.user?.id, // Fallback if you have auth
+            files: filesToProcess
+        });
+
+        console.log(`♻️ Re-upload triggered for Issue: ${issue._id}`);
+
+        res.status(200).json({
+            success: true,
+            message: "Media queued for processing.",
+            issueId: issue._id
+        });
+
+    } catch (error) {
+        console.error("Re-upload Error:", error);
+        res.status(500).json({ success: false, message: "Server error during re-upload." });
     }
 });
 

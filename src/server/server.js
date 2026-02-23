@@ -48,6 +48,7 @@ io.on('connection', (socket) => {
     });
 });
 
+require('../workers/mediaWorker')(io);
 // Start the background cron jobs
 startGarbageCollector();
 
@@ -88,7 +89,6 @@ app.use('/', userRouter);
 app.use('/', issueRouter);
 app.use('/', contactRouter);
 app.use('/', mediaRouter);
-
 
 // A simple route to keep the server awake
 app.get('/ping', (req, res) => {
