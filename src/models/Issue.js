@@ -112,13 +112,15 @@ const issueModel = new mongoose.Schema({
     confirmationCount: { type: Number, default: 0 },
     isPublic: { type: Boolean, default: true, index: true },
     isDeleted: { type: Boolean, default: false, index: true }
-});
+},
+    { timestamps: true });
 
 //Essential GeoSpatial Index
 issueModel.index({ 'location.geoData': '2dsphere' });
 // Optimized for finding issues by status within a city (e.g., "Open issues in Mumbai")
 issueModel.index({ 'location.city': 1, status: 1 });
 issueModel.index({ 'location.pinCode': 1, status: 1 });
+issueModel.index({ 'title': 'text' });
 
 const Issue = mongoose.model('Issue', issueModel);
 

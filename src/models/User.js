@@ -87,6 +87,25 @@ const userSchema = new mongoose.Schema({
         type: Number,
         default: 10
     },
+    rank: {
+        type: String,
+        enum: ["Citizen", "Activist", "Community Leader", "Civic Hero", "Legend"],
+        default: "Citizen",
+        index: true
+    },
+    badges: [
+        {
+            name: {
+                type: String,
+                required: true,
+                enum: ["Citizen", "Activist", "Community Leader", "Civic Hero", "Legend"],
+                default: 'Citizen'
+            },
+            earnedAt: { type: Date, default: Date.now },
+            description: { type: String },
+            icon: { type: String } // Optional: URL to badge image
+        }
+    ],
     issuesReported: {
         type: Number,
         default: 0

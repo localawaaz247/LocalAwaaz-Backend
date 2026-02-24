@@ -22,7 +22,9 @@ const calculateImpactScore = require('../utils/impactScore');
 const TempMedia = require('../models/TempMedia');
 const triggerNotification = require('../utils/notificationService');
 const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const s3 = require('../config/s3Client')
+const s3 = require('../config/s3Client');
+const { checkAndAssignRank } = require('../utils/gamification');
+
 //GET issues according to City and Pincode
 issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
     try {
@@ -106,7 +108,6 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         // Validation (Strict)
         checkIssueCreation(req);
 
-        // --- CHANGE 1: Extract uploadToken instead of media array ---
         const { title, category, description, location, isAnonymous, uploadToken } = req.body;
 
         if (!uploadToken) {
@@ -115,12 +116,8 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
 
         // 2. Fetch User
         const user = await User.findById(userId).session(session);
-        if (!user) {
-            throw new Error('User not found');
-        }
-        if (!user.isEmailVerified) {
-            throw new Error('Verify email before posting');
-        }
+        if (!user) throw new Error('User not found');
+        if (!user.isEmailVerified) throw new Error('Verify email before posting');
 
         // 3. Priority Logic
         let priority = 'LOW';
@@ -146,15 +143,13 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }
         };
 
-        // --- CHANGE 2: Check TempMedia for parked background data ---
-        // Pass the session here so it stays within the transaction safety net
+        // 4. Check TempMedia
         const parkedData = await TempMedia.find({ uploadToken }).session(session);
 
         let readyUrls = [];
         let isMediaFailed = false;
 
         if (parkedData.length > 0) {
-            // Check if ANY of the parked records flagged a failure
             const errorRecord = parkedData.find(p => p.mediaFailed === true);
             if (errorRecord) {
                 isMediaFailed = true;
@@ -172,13 +167,10 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             description: description.trim(),
             location: issueLocation,
             priority,
-
-            // --- Apply the Async Fields ---
             uploadToken: uploadToken,
             media: readyUrls,
-            mediaFailed: isMediaFailed, // Set the flag
-            mediaProcessing: parkedData.length === 0, // If empty, the worker is still compressing!
-
+            mediaFailed: isMediaFailed,
+            mediaProcessing: parkedData.length === 0,
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
@@ -187,11 +179,12 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }]
         }], { session });
 
+        // 6. Give Points
         await User.findByIdAndUpdate(userId, {
             $inc: { issuesReported: 1, civilScore: 20 }
         }, { session });
 
-        // --- CHANGE 4: Cleanup TempMedia by Token instead of Keys ---
+        // Cleanup TempMedia
         if (parkedData.length > 0) {
             await TempMedia.deleteMany({ uploadToken }).session(session);
         }
@@ -200,6 +193,9 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         await session.commitTransaction();
         session.endSession();
 
+        // 🚀 NEW: Check for Rank Up! (Must be AFTER commit so DB sees the new score)
+        await checkAndAssignRank(userId);
+
         return res.status(201).json({
             success: true,
             message: "Your Issue has been recorded",
@@ -207,11 +203,9 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         });
 
     } catch (err) {
-        // 8. Rollback! If anything above fails, undo all changes.
         await session.abortTransaction();
         session.endSession();
 
-        // Differentiate between our custom errors and server crashes
         const customErrors = [
             'User not found',
             'Verify email before posting',
@@ -509,6 +503,7 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
     try {
         const { userId } = req;
         const { id } = req.params;
+
         const confirmedIssue = await Issue.findOneAndUpdate(
             {
                 _id: id,
@@ -516,45 +511,53 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
                 "confirmations.user": { $ne: userId }
             },
             {
-                $push: {
-                    confirmations: { user: userId }
-                },
+                $push: { confirmations: { user: userId } },
                 $inc: { confirmationCount: 1 }
             },
             { new: true }
         );
+
         if (confirmedIssue) {
+            // Give Points to the CONFIRMER
             await User.findByIdAndUpdate(userId, {
                 $inc: {
                     civilScore: 5,
                     issuesConfirmed: 1
                 }
             });
+
+            // 🚀 NEW: Check for Rank Up!
+            await checkAndAssignRank(userId);
+
+            // Optional: Also give points to the Reporter (Community Support)
+            // const reporter = await User.findById(confirmedIssue.reportedBy);
+            // reporter.civilScore += 2;
+            // await reporter.save();
+            // await checkAndAssignRank(reporter._id);
+
             triggerNotification({
-                recipientId: confirmedIssue.reportedBy, // The owner of the issue
-                senderId: userId,                       // The person confirming
+                recipientId: confirmedIssue.reportedBy,
+                senderId: userId,
                 issueId: confirmedIssue._id,
                 type: 'ISSUE_CONFIRMED',
                 message: "Someone confirmed the issue you reported.",
-                io: req.app.get('io')                   // Grab the socket instance
+                io: req.app.get('io')
             });
-            return res.status(200).json(
-                {
-                    success: true,
-                    message: "Issue confirmed successfully",
-                    newConfirmedCount: confirmedIssue.confirmationCount
 
-                })
+            return res.status(200).json({
+                success: true,
+                message: "Issue confirmed successfully",
+                newConfirmedCount: confirmedIssue.confirmationCount
+            });
         }
+
         const issue = await Issue.exists({ _id: id, isDeleted: false });
         if (!issue) {
             return res.status(404).json({ success: false, message: "Issue not found" });
+        } else {
+            return res.status(400).json({ success: false, message: "You have already confirmed this Issue" });
         }
-        else {
-            return res.status(400).json({ success: false, message: "You have already confirmed this Issue" })
-        }
-    }
-    catch (err) {
+    } catch (err) {
         console.log(err);
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
     }
@@ -563,49 +566,41 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
 // POST endpoint to flag an issue for a specific reason
 issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async (req, res) => {
     try {
-        const { userId } = req;          // Authenticated user's ID
-        const { id } = req.params;       // Issue ID from URL
-        const flag = checkIssueFlags(req); // Validate/check the flag reason from request
+        const { userId } = req;
+        const { id } = req.params;
+        const flag = checkIssueFlags(req);
+        
         if (!flag) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid Flag reason" // Reject invalid or unrecognized flags
-            });
+            return res.status(400).json({ success: false, message: "Invalid Flag reason" });
         }
 
-        // Attempt to flag the issue only if:
-        // 1) User hasn't flagged it before
-        // 2) Issue exists and is not deleted
         const updatedIssue = await Issue.findOneAndUpdate(
             {
                 _id: id,
-                "flags.flaggedBy": { $ne: userId }, // Prevent duplicate flags by same user
+                "flags.flaggedBy": { $ne: userId },
                 isDeleted: false
             },
             {
                 $push: {
-                    flags: {
-                        flagReason: flag,  // Add the flag reason
-                        flaggedBy: userId  // Record who flagged it
-                    }
+                    flags: { flagReason: flag, flaggedBy: userId }
                 },
-                $inc: {
-                    flagCount: 1          // Increment the total flag count
-                }
+                $inc: { flagCount: 1 }
             },
-            {
-                new: true // Return the updated document
-            }
+            { new: true }
         );
 
-        // If flagging was successful, return success with new flag count
         if (updatedIssue) {
+            // Give Points for Flagging (Helpful Moderation)
             await User.findByIdAndUpdate(userId, {
                 $inc: {
                     civilScore: 2,
                     issuesFlagged: 1
                 }
-            })
+            });
+
+            // 🚀 NEW: Check for Rank Up!
+            await checkAndAssignRank(userId);
+
             return res.status(200).json({
                 success: true,
                 message: "Issue flagged successfully",
@@ -613,20 +608,14 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
             });
         }
 
-        // If update failed, check if issue exists at all
         const issueExists = await Issue.exists({ _id: id, isDeleted: false });
         if (!issueExists) {
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
-        // Otherwise, user has already flagged this issue
-        return res.status(400).json({
-            success: false,
-            message: "You have already flagged this Issue"
-        });
+        return res.status(400).json({ success: false, message: "You have already flagged this Issue" });
 
     } catch (err) {
-        // Log any errors and return 500 server error
         console.log(err);
         return res.status(500).json({ success: false, message: err.message });
     }
