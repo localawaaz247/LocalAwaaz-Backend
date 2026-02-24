@@ -1,8 +1,8 @@
 const cron = require('node-cron');
+const TempMedia = require('../models/TempMedia');
 const { S3Client, DeleteObjectCommand } = require("@aws-sdk/client-s3");
-const TempMedia = require('../models/TempMedia'); // Make sure this path matches your folder structure
 
-// Initialize the Cloudflare R2 Client specifically for the cleaner
+// Re-initialize S3 Client here (since this file runs independently)
 const s3 = new S3Client({
     region: "auto",
     endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -13,46 +13,48 @@ const s3 = new S3Client({
 });
 
 const startGarbageCollector = () => {
-    // Schedule to run every night at 3:00 AM
-    cron.schedule('0 3 * * *', async () => {
-        console.log("Running Nightly Garbage Collection for Orphaned Files...");
+    console.log("🗑️  Garbage Collector Service Started...");
 
+    // Run every hour: '0 * * * *'
+    cron.schedule('0 * * * *', async () => {
         try {
-            // Find all temp media older than 2 hours
-            const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+            console.log("⏰ Running Hourly Garbage Collection...");
 
-            // Note: Ensure your TempMedia schema doesn't have an automatic TTL index 
-            // that deletes documents before this script can read the R2 keys!
-            const orphanedFiles = await TempMedia.find({ createdAt: { $lt: twoHoursAgo } });
+            // 1. Find files older than 24 hours
+            const twentyFourHoursAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+            const junkFiles = await TempMedia.find({ createdAt: { $lt: twentyFourHoursAgo } });
 
-            if (orphanedFiles.length === 0) {
-                console.log("No orphaned files found to clean.");
+            if (junkFiles.length === 0) {
+                console.log("✅ No junk files found.");
                 return;
             }
 
-            console.log(`Found ${orphanedFiles.length} orphaned files. Starting deletion...`);
+            console.log(`⚠️ Found ${junkFiles.length} abandoned files. Deleting...`);
 
-            // Delete each orphaned file from Cloudflare R2
-            for (const file of orphanedFiles) {
-                const command = new DeleteObjectCommand({
-                    Bucket: process.env.R2_BUCKET_NAME,
-                    Key: file.r2Key,
-                });
+            // 2. Delete from Cloudflare R2 and Database
+            for (const file of junkFiles) {
+                try {
+                    // Delete from R2
+                    const command = new DeleteObjectCommand({
+                        Bucket: process.env.R2_BUCKET_NAME,
+                        Key: file.r2Key,
+                    });
+                    await s3.send(command);
+                    console.log(`☁️  Deleted from R2: ${file.r2Key}`);
 
-                await s3.send(command); // Deletes from Cloudflare
-                await TempMedia.findByIdAndDelete(file._id); // Removes from MongoDB
+                    // Delete from MongoDB
+                    await TempMedia.findByIdAndDelete(file._id);
 
-                console.log(`Deleted orphaned file: ${file.r2Key}`);
+                } catch (err) {
+                    console.error(`❌ Failed to delete ${file.r2Key}:`, err.message);
+                }
             }
-
-            console.log("Nightly garbage collection complete.");
+            console.log("✨ Garbage Collection Complete.");
 
         } catch (error) {
-            console.error("Garbage Collection Failed:", error);
+            console.error("❌ Garbage Collector Error:", error);
         }
     });
-
-    console.log("Orphaned media garbage collector scheduled (Runs daily at 3:00 AM).");
 };
 
 module.exports = startGarbageCollector;

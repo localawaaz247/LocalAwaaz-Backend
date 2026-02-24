@@ -1,16 +1,38 @@
 const express = require('express');
 const multer = require('multer');
 const crypto = require("crypto");
+const fs = require('fs');
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
-const { mediaQueue } = require('../workers/queue');
-const Issue = require('../models/Issue');
+const TempMedia = require('../models/TempMedia');
 
 const mediaRouter = express.Router();
 
+const s3 = new S3Client({
+    region: "auto",
+    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+});
+
 const upload = multer({
-    dest: 'temp_uploads/',
-    limits: { fileSize: 100 * 1024 * 1024 } // 100MB raw limit per file
+    dest: 'temp_uploads/', // 🟢 Reverted back to your original setup
+    limits: {
+        fileSize: 30 * 1024 * 1024, // Max size per individual file (allows flexibility for the combined limit)
+        files: 3 // Max 3 files
+    },
+    fileFilter: (req, file, cb) => {
+        // Strict whitelist prevents malicious SVG uploads
+        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error("FILE_TYPE_NOT_SUPPORTED"), false);
+        }
+    }
 });
 
 const uploadMiddleware = upload.array('issue_media', 3);
@@ -19,106 +41,105 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
     uploadMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ success: false, message: "A file exceeds the 100MB raw upload limit." });
+                return res.status(400).json({ success: false, message: "One of your files exceeds the 30MB limit." });
             }
             if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-                return res.status(400).json({ success: false, message: "Maximum 3 media files allowed." });
+                return res.status(400).json({ success: false, message: "You can only upload a maximum of 3 images." });
             }
             return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
         } else if (err) {
-            return res.status(500).json({ success: false, message: err.message });
+            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
+                return res.status(400).json({ success: false, message: "Only image files (JPG, PNG, WEBP, GIF) are allowed." });
+            }
+            return res.status(500).json({ success: false, message: "An unexpected error occurred during upload." });
         }
         next();
     });
 }, async (req, res) => {
     try {
-        let files = req.files;
+        const files = req.files;
 
-        // --- Enforce Minimum 1 File ---
         if (!files || files.length === 0) {
-            return res.status(400).json({ success: false, message: "At least one media file is required." });
+            return res.status(400).json({ success: false, message: "No files uploaded." });
         }
 
-        // --- Generate the Token ---
-        const uploadToken = crypto.randomUUID();
+        // Enforce COMBINED 30MB limit
+        const MAX_TOTAL_SIZE = 30 * 1024 * 1024;
+        const totalSize = files.reduce((acc, file) => acc + file.size, 0);
 
-        const filesData = files.map(file => ({
-            path: file.path,
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size
-        }));
+        if (totalSize > MAX_TOTAL_SIZE) {
+            console.log(`⚠️ Upload rejected. Total size ${totalSize} exceeds 30MB.`);
+            files.forEach(f => {
+                if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+            });
+            return res.status(400).json({
+                success: false,
+                message: "Total combined file size exceeds the 30MB limit. Please compress your images."
+            });
+        }
 
-        // --- Queue the Job ---
-        await mediaQueue.add('compress-and-upload', {
-            uploadToken: uploadToken,
-            userId: req.userId,
-            files: filesData
-        });
+        const uploadedUrls = [];
+        console.log(`🚀 Starting Direct Upload for ${files.length} images...`);
 
-        // --- Return Token Instantly ---
+        for (const file of files) {
+            try {
+                const fileStream = fs.createReadStream(file.path);
+                const uniqueFileName = `${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+                const command = new PutObjectCommand({
+                    Bucket: process.env.R2_BUCKET_NAME,
+                    Key: uniqueFileName,
+                    Body: fileStream,
+                    ContentType: file.mimetype,
+                });
+
+                await s3.send(command);
+
+                const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
+                uploadedUrls.push(publicUrl);
+
+                await TempMedia.create({
+                    url: publicUrl,
+                    r2Key: uniqueFileName
+                });
+
+                console.log(`✅ Uploaded & Tracked: ${uniqueFileName}`);
+
+                // Clean up local temp file immediately after success
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
+            } catch (uploadErr) {
+                console.error(`❌ Failed to upload ${file.originalname} to Cloudflare:`, uploadErr);
+                // Throwing the error here breaks the loop immediately (Fail-Fast)
+                throw new Error("CLOUDFLARE_UPLOAD_FAILED");
+            }
+        }
+
         return res.status(200).json({
             success: true,
-            message: "Media received and processing in the background.",
-            uploadToken: uploadToken // Frontend must send this to /create-issue
+            message: "Images uploaded successfully.",
+            media: uploadedUrls
         });
 
     } catch (error) {
-        console.error("Upload error:", error);
-        return res.status(500).json({ success: false, message: "Internal server error." });
-    }
-});
+        console.error("Upload Process Error:", error);
 
-// --- RE-UPLOAD FAILED MEDIA ROUTE ---
-mediaRouter.post('/reupload-media/:id', userAuth, upload.array('issue_media', 5), async (req, res) => {
-    try {
-        const issueId = req.params.id;
-
-        // 1. Find the failed issue
-        const issue = await Issue.findById(issueId);
-        if (!issue) {
-            return res.status(404).json({ success: false, message: "Issue not found." });
+        // Guarantee ALL remaining local files in temp_uploads/ are cleaned up if the process aborted
+        if (req.files) {
+            req.files.forEach(f => {
+                if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+            });
         }
 
-        // 2. Security Check: Did it actually fail?
-        if (!issue.mediaFailed) {
-            return res.status(400).json({ success: false, message: "This issue does not need a media re-upload." });
+        // Send the user-friendly error to try again
+        if (error.message === "CLOUDFLARE_UPLOAD_FAILED") {
+            return res.status(500).json({
+                success: false,
+                message: "A network issue occurred while saving your images. Please try uploading them one more time."
+            });
         }
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ success: false, message: "No new media provided for re-upload." });
-        }
 
-        // 3. Prepare files for the worker
-        const filesToProcess = req.files.map(file => ({
-            path: file.path,
-            originalname: file.originalname,
-            mimetype: file.mimetype,
-            size: file.size
-        }));
-
-        // 4. Reset the database flags immediately
-        issue.mediaProcessing = true;
-        issue.mediaFailed = false;
-        await issue.save();
-
-        // 5. Throw it back into BullMQ using the ORIGINAL token!
-        await mediaQueue.add('media-processing', {
-            uploadToken: issue.uploadToken,
-            userId: issue.reportedBy || req.user?.id, // Fallback if you have auth
-            files: filesToProcess
-        });
-
-        console.log(`♻️ Re-upload triggered for Issue: ${issue._id}`);
-
-        res.status(200).json({
-            success: true,
-            message: "Media queued for processing.",
-            issueId: issue._id
-        });
-
-    } catch (error) {
-        console.error("Re-upload Error:", error);
-        res.status(500).json({ success: false, message: "Server error during re-upload." });
+        return res.status(500).json({ success: false, message: "Server error during upload." });
     }
 });
 

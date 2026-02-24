@@ -109,29 +109,25 @@ const checkIssueUpdates = (req) => {
     // 5. MEDIA VALIDATION
     // ============================================================
     if (media !== undefined) {
-        // Must be an array (even if empty)
+        // Must be an array
         if (!Array.isArray(media)) {
-            throw new Error("Media must be an array");
+            throw new Error("Media must be an array of image URLs");
         }
-        //Atleast one media required
+        // At least one media required
         if (media.length < 1) {
-            throw new Error("Atleast one media required");
+            throw new Error("At least one media file is required");
         }
         // Limit the number of uploads to 3
         if (media.length > 3) {
-            throw new Error('You can upload maximum of 3 media');
+            throw new Error('You can upload a maximum of 3 media files');
         }
 
-        // Check every item in the array for a valid URL
+        // Check every item - STRICTLY enforce Strings (URLs)
         media.forEach((item) => {
-            // Unify the format: extract string whether it's an object or a flat string
-            const stringUrl = typeof item === 'object' && item !== null ? item.url : item;
-
-            // Validate the extracted string
-            if (!stringUrl || typeof stringUrl !== 'string' || !validate.isURL(stringUrl)) {
-                throw new Error("Upload valid media URL");
+            if (typeof item !== 'string' || !validate.isURL(item)) {
+                throw new Error("Invalid media format. Expected an array of valid URLs.");
             }
-        })
+        });
     }
 
     // Return true if all checks pass

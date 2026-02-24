@@ -49,7 +49,7 @@ io.on('connection', (socket) => {
     });
 });
 
-require('../workers/mediaWorker')(io);
+// require('../workers/mediaWorker')(io);
 // Start the background cron jobs
 startGarbageCollector();
 

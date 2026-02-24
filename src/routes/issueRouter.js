@@ -22,8 +22,17 @@ const calculateImpactScore = require('../utils/impactScore');
 const TempMedia = require('../models/TempMedia');
 const triggerNotification = require('../utils/notificationService');
 const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
-const s3 = require('../config/s3Client');
 const { checkAndAssignRank } = require('../utils/gamification');
+const { S3Client } = require('@aws-sdk/client-s3');
+
+const s3 = new S3Client({
+    region: "auto",
+    endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+        accessKeyId: process.env.R2_ACCESS_KEY_ID,
+        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
+    },
+});
 
 //GET issues according to City and Pincode
 issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
@@ -108,9 +117,11 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         // Validation (Strict)
         checkIssueCreation(req);
 
-        const { title, category, description, location, isAnonymous, uploadToken } = req.body;
+        // 🟢 CHANGE 1: Accept 'media' (array of URLs) instead of 'uploadToken'
+        const { title, category, description, location, isAnonymous, media } = req.body;
 
-        if (!uploadToken) {
+        // 🟢 CHANGE 2: Validate that media URLs exist
+        if (!media || !Array.isArray(media) || media.length === 0) {
             throw new Error('At least one media file must be uploaded before creating an issue.');
         }
 
@@ -143,22 +154,11 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }
         };
 
-        // 4. Check TempMedia
-        const parkedData = await TempMedia.find({ uploadToken }).session(session);
+        // 🟢 CHANGE 3: Format the URLs for the Schema
+        // Assuming your Issue Schema defines media as [{ url: String }]
+        const mediaObjects = media.map(url => ({ url: url }));
 
-        let readyUrls = [];
-        let isMediaFailed = false;
-
-        if (parkedData.length > 0) {
-            const errorRecord = parkedData.find(p => p.mediaFailed === true);
-            if (errorRecord) {
-                isMediaFailed = true;
-            } else {
-                readyUrls = parkedData.filter(p => p.url).map(p => ({ url: p.url }));
-            }
-        }
-
-        // 5. Create Issue
+        // 4. Create Issue
         const [newIssue] = await Issue.create([{
             reportedBy: userId,
             title: title.trim(),
@@ -167,10 +167,10 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             description: description.trim(),
             location: issueLocation,
             priority,
-            uploadToken: uploadToken,
-            media: readyUrls,
-            mediaFailed: isMediaFailed,
-            mediaProcessing: parkedData.length === 0,
+            // uploadToken: uploadToken, // REMOVED
+            media: mediaObjects,       // 🟢 DIRECTLY ASSIGN URLs
+            mediaFailed: false,        // No processing, so cannot fail
+            mediaProcessing: false,    // No processing needed
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
@@ -179,27 +179,35 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }]
         }], { session });
 
-        // 6. Give Points
+        // 5. Give Points
         await User.findByIdAndUpdate(userId, {
             $inc: { issuesReported: 1, civilScore: 20 }
         }, { session });
 
-        // Cleanup TempMedia
-        if (parkedData.length > 0) {
-            await TempMedia.deleteMany({ uploadToken }).session(session);
+        // 🟢 CHANGE 4: The "Verify" Step (Cleanup TempMedia)
+        // We delete these specific URLs from TempMedia. 
+        // If we don't do this, the Garbage Collector will delete the actual files from R2 in 24 hours.
+        // By deleting them here, they become "Permanent".
+        if (media.length > 0) {
+            await TempMedia.deleteMany({ url: { $in: media } }).session(session);
         }
 
-        // 7. Commit the Transaction
+        // 6. Commit the Transaction
         await session.commitTransaction();
         session.endSession();
 
-        // 🚀 NEW: Check for Rank Up! (Must be AFTER commit so DB sees the new score)
-        await checkAndAssignRank(userId);
+        // 🚀 Check for Rank Up!
+        // (Note: Since we are outside the transaction, ensure checkAndAssignRank handles its own logic safely)
+        try {
+            await checkAndAssignRank(userId);
+        } catch (rankError) {
+            console.error("Rank update failed (non-critical):", rankError.message);
+        }
 
         return res.status(201).json({
             success: true,
             message: "Your Issue has been recorded",
-            issueId: newIssue._id
+            issueId: newIssue[0]._id // Access index 0 because .create returns an array when used with transactions
         });
 
     } catch (err) {
@@ -282,9 +290,10 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         const { userId } = req;
         const { id } = req.params;
 
-        // --- CHANGE 1: Added 'uploadToken' to allowed updates ---
-        const allowedUpdates = ['title', 'category', 'description', 'location', 'media', 'uploadToken'];
-        checkIssueUpdates(req);
+        // 🟢 CHANGE 1: Remove 'uploadToken', ensure 'media' is allowed
+        const allowedUpdates = ['title', 'category', 'description', 'location', 'media'];
+
+        checkIssueUpdates(req); 
 
         // 1. Validate ID
         if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -300,14 +309,12 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: "The issue has been deleted" });
         }
 
-        const { status } = issue;
-        if (status !== "OPEN") {
-            return res.status(400).json({ success: false, message: "Issues with status 'OPEN' can be updated" })
+        if (issue.status !== "OPEN") {
+            return res.status(400).json({ success: false, message: "Only issues with status 'OPEN' can be updated" })
         }
 
-        const { reportedBy } = issue;
-        if (userId.toString() !== reportedBy.toString()) {
-            return res.status(403).json({ success: false, message: 'You are not authorized to update' });
+        if (userId.toString() !== issue.reportedBy.toString()) {
+            return res.status(403).json({ success: false, message: 'You are not authorized to update this issue' });
         }
 
         const updates = Object.keys(req.body);
@@ -317,113 +324,87 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid field in update request" });
         }
 
-        // 3. PRIORITY LOGIC
-        if (req.body.category) {
-            const upperCat = req.body.category.toUpperCase();
-            let newPriority;
-            switch (upperCat) {
-                case 'SAFETY': newPriority = 'CRITICAL'; break;
-                case 'WATER_SUPPLY':
-                case 'ELECTRICITY':
-                case 'SANITATION': newPriority = 'HIGH'; break;
-                case 'ROAD_&_POTHOLES':
-                case 'GARBAGE':
-                case 'STREET_LIGHTS':
-                case 'TRAFFIC': newPriority = 'MEDIUM'; break;
-                case 'ENCROACHMENT':
-                default: newPriority = 'LOW'; break;
+        // 🟢 CHANGE 2: Handle Media Updates (The Logic Shift)
+        if (updates.includes('media')) {
+            const newMediaUrls = req.body.media || []; // Expecting ["url1", "url2"]
+            const currentMediaUrls = issue.media.map(m => m.url);
+
+            // A. Identify Deleted Images (In DB, but NOT in new request)
+            const urlsToDelete = currentMediaUrls.filter(url => !newMediaUrls.includes(url));
+
+            if (urlsToDelete.length > 0) {
+                console.log(`🗑️ Deleting ${urlsToDelete.length} removed images...`);
+                for (const url of urlsToDelete) {
+                    try {
+                        const key = url.split('/').pop(); // Extract filename from URL
+                        const command = new DeleteObjectCommand({
+                            Bucket: process.env.R2_BUCKET_NAME,
+                            Key: key,
+                        });
+                        await s3.send(command);
+                    } catch (err) {
+                        console.error(`❌ Failed to delete old media: ${url}`, err);
+                    }
+                }
             }
-            issue.priority = newPriority;
-            issue.category = upperCat;
+
+            // B. Identify New Images (In new request, but NOT in DB)
+            const newlyAddedUrls = newMediaUrls.filter(url => !currentMediaUrls.includes(url));
+
+            if (newlyAddedUrls.length > 0) {
+                // "Verify" these new images so Garbage Collector doesn't eat them
+                await TempMedia.deleteMany({ url: { $in: newlyAddedUrls } });
+                console.log(`✅ Verified ${newlyAddedUrls.length} new images.`);
+            }
+
+            // C. Update the Issue Record
+            issue.media = newMediaUrls.map(url => ({ url }));
         }
 
-        // 4. Update Loop
-        for (const field of updates) {
-            if (field === 'category' || field === 'uploadToken') continue; // Handle token separately at the end
+        // 3. Handle Other Fields
+        updates.forEach((field) => {
+            if (field === 'media') return; // Handled above
 
             if (field === 'location') {
                 const newLoc = req.body.location;
                 if (!issue.location) issue.location = {};
-                if (newLoc.address) issue.location.address = newLoc?.address;
-                if (newLoc.city) issue.location.city = newLoc?.city;
-                if (newLoc.pinCode) issue.location.pinCode = newLoc?.pinCode;
-                if (newLoc.state) issue.location.state = newLoc?.state;
-
-                if (newLoc.geoData && newLoc.geoData.coordinates) {
+                if (newLoc.address) issue.location.address = newLoc.address;
+                if (newLoc.city) issue.location.city = newLoc.city;
+                if (newLoc.pinCode) issue.location.pinCode = newLoc.pinCode;
+                if (newLoc.state) issue.location.state = newLoc.state;
+                if (newLoc.geoData?.coordinates) {
                     issue.location.geoData = {
                         type: 'Point',
                         coordinates: newLoc.geoData.coordinates
                     };
                 }
-            }
-            else if (field === 'title' || field === 'description') {
-                issue[field] = req.body[field].trim();
-            }
-            // --- Handle Deletions of Existing Media ---
-            else if (field === 'media') {
-                if (Array.isArray(req.body.media)) {
-                    const oldMediaKeys = issue.media.map(m => m.url.split('/').pop());
-
-                    // Keep only the media the user didn't delete
-                    issue.media = req.body.media.map(item => {
-                        const stringUrl = typeof item === 'object' ? (item.url || item.publicUrl) : item;
-                        return { url: stringUrl };
-                    });
-
-                    const newMediaKeys = issue.media.map(m => m.url.split('/').pop());
-
-                    // DELETE REMOVED MEDIA FROM CLOUDFLARE
-                    const keysToDelete = oldMediaKeys.filter(key => !newMediaKeys.includes(key));
-                    for (const key of keysToDelete) {
-                        try {
-                            const command = new DeleteObjectCommand({
-                                Bucket: process.env.R2_BUCKET_NAME,
-                                Key: key,
-                            });
-                            await s3.send(command);
-                            console.log(`Deleted removed media from Cloudflare: ${key}`);
-                        } catch (err) {
-                            console.error(`Failed to delete media ${key} from Cloudflare:`, err);
-                        }
-                    }
+            } else if (field === 'category') {
+                // Priority Logic
+                const upperCat = req.body.category.toUpperCase();
+                let newPriority = 'LOW';
+                switch (upperCat) {
+                    case 'SAFETY': newPriority = 'CRITICAL'; break;
+                    case 'WATER_SUPPLY':
+                    case 'ELECTRICITY':
+                    case 'SANITATION': newPriority = 'HIGH'; break;
+                    case 'ROAD_&_POTHOLES':
+                    case 'GARBAGE':
+                    case 'STREET_LIGHTS':
+                    case 'TRAFFIC': newPriority = 'MEDIUM'; break;
                 }
-            }
-            else {
-                issue[field] = req.body[field];
-            }
-        }
-
-        // --- CHANGE 2: Handle NEW media added during edit ---
-        if (updates.includes('uploadToken') && req.body.uploadToken) {
-            const token = req.body.uploadToken;
-            issue.uploadToken = token; // Attach the new token so the worker can find this issue!
-
-            const parkedData = await TempMedia.find({ uploadToken: token });
-
-            if (parkedData.length > 0) {
-                // The worker already finished before the user hit "Save"
-                const errorRecord = parkedData.find(p => p.mediaFailed === true);
-                if (errorRecord) {
-                    issue.mediaFailed = true;
-                } else {
-                    const readyUrls = parkedData.filter(p => p.url).map(p => ({ url: p.url }));
-                    issue.media.push(...readyUrls); // Append new media to existing media
-                }
-                await TempMedia.deleteMany({ uploadToken: token });
-                issue.mediaProcessing = false;
+                issue.priority = newPriority;
+                issue.category = upperCat;
             } else {
-                // The worker is still actively processing the new files
-                issue.mediaProcessing = true;
-                issue.mediaFailed = false;
+                issue[field] = req.body[field]; // Title, Description
             }
-        }
+        });
 
         await issue.save();
-        return res.status(200).json({ success: true, message: "Issue updated successfully" });
-    }
-    catch (err) {
+        return res.status(200).json({ success: true, message: "Issue updated successfully", issue });
+
+    } catch (err) {
         console.error("Update issue error", err);
-        return res.status(500).json({ success: false, message: err.message })
+        return res.status(500).json({ success: false, message: err.message });
     }
 });
 
@@ -569,7 +550,7 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
         const { userId } = req;
         const { id } = req.params;
         const flag = checkIssueFlags(req);
-        
+
         if (!flag) {
             return res.status(400).json({ success: false, message: "Invalid Flag reason" });
         }
