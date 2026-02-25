@@ -69,10 +69,16 @@ async function fileToGenerativePart(path, mimeType) {
 
 // Helper: Clean up files safely
 const cleanupFiles = (files) => {
-    if (!files || !Array.isArray(files)) return;
-    files.forEach(file => {
+    if (!files) return;
+
+    // Normalize input to an array, even if it's a single file object
+    const fileArray = Array.isArray(files) ? files : [files];
+
+    fileArray.forEach(file => {
         if (file && file.path) {
-            fs.unlink(file.path, (err) => { if (err) console.error("Cleanup error:", err); });
+            fs.unlink(file.path, (err) => {
+                if (err) console.error(`[Cleanup] Failed to delete ${file.path}:`, err);
+            });
         }
     });
 };
@@ -236,11 +242,8 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
             aiData = JSON.parse(cleanText);
         } catch (e) {
             console.error("JSON Parse Error. Raw AI Response:", responseText);
-            cleanupFiles(req.files);
             return res.status(500).json({ success: false, message: "AI Analysis failed to generate valid JSON." });
         }
-
-        cleanupFiles(req.files);
 
         if (!aiData.is_valid) {
             return res.status(400).json({
@@ -264,9 +267,12 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         });
 
     } catch (error) {
-        cleanupFiles(req.files);
         console.error("AI Analysis Error:", error);
         return res.status(500).json({ success: false, message: "Analysis Failed", error: error.message });
+    }
+    finally {
+        // AUTO-CLEANUP: This runs automatically after EVERYTHING (Success or Error)
+        cleanupFiles(req.files);
     }
 });
 
@@ -412,11 +418,8 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddlewa
             aiData = JSON.parse(cleanText);
         } catch (e) {
             console.error("Audio JSON Parse Error:", responseText);
-            cleanupFiles([req.file]);
             return res.status(500).json({ success: false, message: "AI Audio Analysis failed." });
         }
-
-        cleanupFiles([req.file]);
 
         if (!aiData.is_valid) {
             return res.status(400).json({
@@ -440,9 +443,12 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddlewa
         });
 
     } catch (error) {
-        if (req.file) cleanupFiles([req.file]);
         console.error("AI Audio Analysis Error:", error);
         return res.status(500).json({ success: false, message: "Analysis Failed", error: error.message });
+    }
+    finally {
+        // AUTO-CLEANUP: This runs automatically after EVERYTHING (Success or Error)
+        cleanupFiles(req.file);
     }
 });
 
