@@ -33,9 +33,21 @@ const upload = multer({
     limits: { fileSize: 30 * 1024 * 1024 } // 30 MB limit
 });
 
-// Helper: Handle Multer errors gracefully
+// Helper: Handle Multer errors gracefully (Images)
 const uploadMiddleware = (req, res, next) => {
     upload.array('images', 3)(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
+        } else if (err) {
+            return res.status(500).json({ success: false, message: "Unknown upload error" });
+        }
+        next();
+    });
+};
+
+// Helper: Handle Multer errors gracefully (Audio)
+const audioUploadMiddleware = (req, res, next) => {
+    upload.single('audio')(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
         } else if (err) {
@@ -49,7 +61,7 @@ async function fileToGenerativePart(path, mimeType) {
     const data = await fsPromises.readFile(path);
     return {
         inlineData: {
-            data: data.toString("base64"),
+            data: Buffer.from(data).toString("base64"),
             mimeType
         },
     };
@@ -57,9 +69,11 @@ async function fileToGenerativePart(path, mimeType) {
 
 // Helper: Clean up files safely
 const cleanupFiles = (files) => {
-    if (!files) return;
+    if (!files || !Array.isArray(files)) return;
     files.forEach(file => {
-        fs.unlink(file.path, (err) => { if (err) console.error("Cleanup error:", err); });
+        if (file && file.path) {
+            fs.unlink(file.path, (err) => { if (err) console.error("Cleanup error:", err); });
+        }
     });
 };
 
@@ -166,14 +180,12 @@ async function generateWithRetry(message, history, tools, systemInstruction, att
 // ============================================================================
 // 🟢 ROUTE 1: SMART IMAGE ANALYSIS
 // ============================================================================
-// Note: We are using 'uploadMiddleware' here to handle upload errors properly
 lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) return res.status(400).json({ success: false, message: "No images uploaded" });
 
         const { userHint, city, state, address, lat, lng } = req.body;
         const { modelInstance } = getNextClient({
-            // Note: Some vision models ignore strict JSON mode, so we handle cleanup manually below
             generationConfig: { responseMimeType: "application/json" }
         });
 
@@ -187,7 +199,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         Analyze this civic issue image for 'LocalAwaaz'.
         
         CONTEXT:
-        - User Hint: "${userHint || ''}"
+        - User Hint: """${userHint || ''}"""
         - Location: ${address || ''} (${city || ''}, ${state || ''})
 
         RULES:
@@ -216,18 +228,17 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         const result = await modelInstance.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
 
-        // 🟢 FIX START: Clean Markdown before parsing
+        // Clean Markdown if present
         const cleanText = responseText.replace(/```json|```/g, '').trim();
 
         let aiData;
         try {
             aiData = JSON.parse(cleanText);
         } catch (e) {
-            console.error("JSON Parse Error. Raw AI Response:", responseText); // Log this to see what Gemini actually sent!
+            console.error("JSON Parse Error. Raw AI Response:", responseText);
             cleanupFiles(req.files);
             return res.status(500).json({ success: false, message: "AI Analysis failed to generate valid JSON." });
         }
-        // 🟢 FIX END
 
         cleanupFiles(req.files);
 
@@ -253,7 +264,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         });
 
     } catch (error) {
-        if (req.files) cleanupFiles(req.files);
+        cleanupFiles(req.files);
         console.error("AI Analysis Error:", error);
         return res.status(500).json({ success: false, message: "Analysis Failed", error: error.message });
     }
@@ -283,6 +294,7 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
 
         const systemInstruction = `You are LokAI, the civic brain of LocalAwaaz. LocalAwaaz is an independent platform where citizens can report local issues,
         track their resolution, and earn recognition badges for making a difference in their community.
+        If the user writes the prompt in other languages or mix of languages like Hinglish, understand the prompt, then reply the user in that language.
         USER: ${userName} | LOC: ${activeCity} | LAT/LNG: ${lat},${lng}
         ${locationInstruction}
 
@@ -297,7 +309,6 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
 
         const { result, chat } = await generateWithRetry(message, history, toolDefinitions, systemInstruction);
 
-        // Use Gemini SDK method to get function calls safely
         const calls = result.response.functionCalls();
         const call = (calls && calls.length > 0) ? calls[0] : null;
 
@@ -313,7 +324,6 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
                 console.log(`[LokAI] Calling Tool: ${toolName}`);
                 const dbData = await handler(args, currentUserId);
 
-                // Send tool output back to Gemini to generate final natural language response
                 const finalResult = await chat.sendMessage([{
                     functionResponse: {
                         name: toolName,
@@ -329,7 +339,6 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
             }
         }
 
-        // Return standard text response if no tool was called
         const latestHistory = await chat.getHistory();
         return res.json({
             success: true,
@@ -341,6 +350,99 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
         console.error("LokAI Chat Error:", error);
         const reply = error.message.includes("429") ? SOFT_MESSAGES.QUOTA : SOFT_MESSAGES.GENERIC;
         res.status(200).json({ reply });
+    }
+});
+
+// ============================================================================
+// 🟣 ROUTE 3: SMART AUDIO ANALYSIS
+// ============================================================================
+lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddleware, async (req, res) => {
+    try {
+        if (!req.file) return res.status(400).json({ success: false, message: "No audio file uploaded" });
+
+        const { userHint, city, state, address, lat, lng } = req.body;
+
+        const { modelInstance } = getNextClient({
+            generationConfig: { responseMimeType: "application/json" }
+        });
+
+        const allowedCategories = [
+            'ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY',
+            'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS',
+            'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'
+        ];
+
+        const prompt = `
+        Listen to this audio report for 'LocalAwaaz'. The user is describing a civic issue.If the user speaks in other langauge or
+        mix of languages like Hinglish then understand it calmly and then write report in JSON format in English accordingly.
+        
+        CONTEXT:
+        - User Hint: """${userHint || ''}"""
+        - Location: ${address || ''} (${city || ''}, ${state || ''})
+
+        RULES:
+        1. **Transcribe**: Listen carefully to what the user says.
+        2. **Summarize**: Create a professional title and description based on the speech.
+        3. **Category**: Classify into one of: ${JSON.stringify(allowedCategories)}.
+        4. **Description**: 10-45 words. Factual. Include location context if relevant.
+        5. **Safety**: If the audio is just noise, music, or abusive/NSFW, set "is_valid": false.
+
+        RETURN EXACT JSON:
+        {
+            "is_valid": boolean,
+            "rejection_reason": stringOrNull,
+            "data": {
+                "title": string,
+                "description": string,
+                "category": string,
+                "subCategory": stringOrNull,
+                "transcription": string
+            }
+        }`;
+
+        const audioPart = await fileToGenerativePart(req.file.path, req.file.mimetype);
+
+        const result = await modelInstance.generateContent([prompt, audioPart]);
+        const responseText = result.response.text();
+
+        const cleanText = responseText.replace(/```json|```/g, '').trim();
+
+        let aiData;
+        try {
+            aiData = JSON.parse(cleanText);
+        } catch (e) {
+            console.error("Audio JSON Parse Error:", responseText);
+            cleanupFiles([req.file]);
+            return res.status(500).json({ success: false, message: "AI Audio Analysis failed." });
+        }
+
+        cleanupFiles([req.file]);
+
+        if (!aiData.is_valid) {
+            return res.status(400).json({
+                success: false,
+                message: aiData.rejection_reason || "Audio is not a valid civic report."
+            });
+        }
+
+        aiData.data.location = {
+            address: address || "Location not provided",
+            city: city || "Unknown",
+            state: state || "Unknown",
+            coordinates: [parseFloat(lng || 0), parseFloat(lat || 0)],
+            auto_detected: true
+        };
+
+        return res.status(200).json({
+            success: true,
+            message: "Audio analysis successful",
+            analysis: aiData.data
+        });
+
+    } catch (error) {
+        if (req.file) cleanupFiles([req.file]);
+        console.error("AI Audio Analysis Error:", error);
+        return res.status(500).json({ success: false, message: "Analysis Failed", error: error.message });
     }
 });
 
