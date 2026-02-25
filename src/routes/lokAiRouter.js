@@ -173,7 +173,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
 
         const { userHint, city, state, address, lat, lng } = req.body;
         const { modelInstance } = getNextClient({
-            // ENABLE JSON MODE
+            // Note: Some vision models ignore strict JSON mode, so we handle cleanup manually below
             generationConfig: { responseMimeType: "application/json" }
         });
 
@@ -187,14 +187,12 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         Analyze this civic issue image for 'LocalAwaaz'.
         
         CONTEXT:
-        - User Hint: """${userHint ? userHint.replace(/"/g, "'") : 'None'}"""
+        - User Hint: "${userHint || ''}"
         - Location: ${address || ''} (${city || ''}, ${state || ''})
-        (Use the hint/location to improve accuracy. If the user prompt in other language or mix language like Hinglish, understand it, translate in English language for JSON data.
-        If hint contradicts visual evidence, trust image.)
 
         RULES:
         1. **Safety**: If NSFW/Irrelevant, set "is_valid": false.
-        2. **Title**: Max 5     words. Professional.
+        2. **Title**: Max 5 words. Professional.
         3. **Description**: 10-45 words. Factual. Include location context if relevant.
         4. **Category**: Must be one of: ${JSON.stringify(allowedCategories)}.
         5. **SubCategory**: Specific detail (e.g. "Streetlight").
@@ -217,14 +215,19 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
 
         const result = await modelInstance.generateContent([prompt, ...imageParts]);
         const responseText = result.response.text();
-        
+
+        // 🟢 FIX START: Clean Markdown before parsing
+        const cleanText = responseText.replace(/```json|```/g, '').trim();
+
         let aiData;
         try {
-            aiData = JSON.parse(responseText);
+            aiData = JSON.parse(cleanText);
         } catch (e) {
+            console.error("JSON Parse Error. Raw AI Response:", responseText); // Log this to see what Gemini actually sent!
             cleanupFiles(req.files);
-            return res.status(500).json({ success: false, message: "AI Analysis failed to generate valid data." });
+            return res.status(500).json({ success: false, message: "AI Analysis failed to generate valid JSON." });
         }
+        // 🟢 FIX END
 
         cleanupFiles(req.files);
 
@@ -235,7 +238,6 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
             });
         }
 
-        // Return AI data merged with the location data sent by frontend
         aiData.data.location = {
             address: address || "Location not provided",
             city: city || "Unknown",
@@ -294,7 +296,7 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
         6. Be concise and professional.`;
 
         const { result, chat } = await generateWithRetry(message, history, toolDefinitions, systemInstruction);
-        
+
         // Use Gemini SDK method to get function calls safely
         const calls = result.response.functionCalls();
         const call = (calls && calls.length > 0) ? calls[0] : null;
@@ -310,7 +312,7 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
 
                 console.log(`[LokAI] Calling Tool: ${toolName}`);
                 const dbData = await handler(args, currentUserId);
-                
+
                 // Send tool output back to Gemini to generate final natural language response
                 const finalResult = await chat.sendMessage([{
                     functionResponse: {
