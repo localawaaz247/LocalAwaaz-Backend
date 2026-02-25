@@ -45,8 +45,11 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
         const searchTokens = search.trim().split(/[\s,]+/).filter(Boolean);
 
         // 2. Create a regex for each word
-        const regexArray = searchTokens.map(token => new RegExp(token, 'i'));
-
+        function escapeRegex(text) {
+            return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+        }
+        const regexArray = searchTokens.map(token => new RegExp(escapeRegex(token), 'i'));
+        
         // 3. Search for ANY of the tokens in your location fields
         const query = {
             isPublic: true,
@@ -133,9 +136,12 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         // 3. Priority Logic
         let priority = 'LOW';
         switch (category) {
-            case 'SAFETY': priority = 'CRITICAL'; break;
+            case 'SAFETY':
+            case 'HEALTH':
+            case 'CORRUPTION': priority = 'CRITICAL'; break;
             case 'WATER_SUPPLY':
             case 'ELECTRICITY':
+            case 'EDUCATION':
             case 'SANITATION': priority = 'HIGH'; break;
             case 'ROAD_&_POTHOLES':
             case 'GARBAGE':
@@ -169,8 +175,8 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             priority,
             // uploadToken: uploadToken, // REMOVED
             media: mediaObjects,       // 🟢 DIRECTLY ASSIGN URLs
-            mediaFailed: false,        // No processing, so cannot fail
-            mediaProcessing: false,    // No processing needed
+            // mediaFailed: false,        // No processing, so cannot fail
+            // mediaProcessing: false,    // No processing needed
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
@@ -293,7 +299,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
         // 🟢 CHANGE 1: Remove 'uploadToken', ensure 'media' is allowed
         const allowedUpdates = ['title', 'category', 'description', 'location', 'media'];
 
-        checkIssueUpdates(req); 
+        checkIssueUpdates(req);
 
         // 1. Validate ID
         if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -383,14 +389,17 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
                 const upperCat = req.body.category.toUpperCase();
                 let newPriority = 'LOW';
                 switch (upperCat) {
-                    case 'SAFETY': newPriority = 'CRITICAL'; break;
+                    case 'SAFETY':
+                    case 'HEALTH':
+                    case 'CORRUPTION': priority = 'CRITICAL'; break;
                     case 'WATER_SUPPLY':
                     case 'ELECTRICITY':
-                    case 'SANITATION': newPriority = 'HIGH'; break;
+                    case 'EDUCATION':
+                    case 'SANITATION': priority = 'HIGH'; break;
                     case 'ROAD_&_POTHOLES':
                     case 'GARBAGE':
                     case 'STREET_LIGHTS':
-                    case 'TRAFFIC': newPriority = 'MEDIUM'; break;
+                    case 'TRAFFIC': priority = 'MEDIUM'; break;
                 }
                 issue.priority = newPriority;
                 issue.category = upperCat;
