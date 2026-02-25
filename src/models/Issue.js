@@ -22,6 +22,13 @@ const issueModel = new mongoose.Schema({
         uppercase: true,
         index: true
     },
+    subCategory: {
+        type: String,
+        default: null,
+        uppercase: true,
+        index: true
+
+    },
     description: {
         type: String,
         trim: true,
@@ -88,9 +95,9 @@ const issueModel = new mongoose.Schema({
             uploadedAt: { type: Date, default: Date.now }
         }
     ],
-    uploadToken: { type: String, index: true, default: null },
-    mediaProcessing: { type: Boolean, default: false },
-    mediaFailed: { type: Boolean, default: false },
+    // uploadToken: { type: String, index: true, default: null },
+    // mediaProcessing: { type: Boolean, default: false },
+    // mediaFailed: { type: Boolean, default: false },
     priority: {
         type: String,
         enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],

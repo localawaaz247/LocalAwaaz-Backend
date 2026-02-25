@@ -18,7 +18,7 @@ const checkIssueCreation = (req) => {
 
     // Define the list of allowed categories for strict validation
     const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'GARBAGE'
-        , 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT'
+        , 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'
     ];
 
     // ============================================================
@@ -32,8 +32,8 @@ const checkIssueCreation = (req) => {
     // Word Count Rule: Title should be short and concise (Max 5 words)
     // We split by spaces (/\s+/) to count actual words, not just characters.
     const titleWordCount = title.trim().split(/\s+/).length;
-    if (titleWordCount > 10) {
-        throw new Error("Title must be within 10 words");
+    if (titleWordCount > 5) {
+        throw new Error("Title must be within 5 words");
     }
 
     // ============================================================
@@ -65,10 +65,10 @@ const checkIssueCreation = (req) => {
 
     // Word Count Rules: 
     // - Minimum 10 words (to ensure enough detail)
-    // - Maximum 100 words (to prevent spam/too long essays)
+    // - Maximum 50 words (to prevent spam/too long essays)
     const descrWordCount = description.trim().split(/\s+/).length;
     if (descrWordCount < 10) throw new Error('At least 10 words required in description');
-    if (descrWordCount > 100) throw new Error('Description cannot be more than 100 words');
+    if (descrWordCount > 50) throw new Error('Description cannot be more than 50 words');
 
     // ============================================================
     // 4. LOCATION VALIDATION (Deep Check)

@@ -17,7 +17,7 @@ const checkIssueUpdates = (req) => {
 
     // List of allowed values for the 'category' field
     const allowedCategories = ['SAFETY', 'WATER_SUPPLY', 'ELECTRICITY', 'SANITATION',
-        'ROAD_&_POTHOLES', 'GARBAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT'];
+        'ROAD_&_POTHOLES', 'GARBAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'];
 
     // ============================================================
     // 1. TITLE VALIDATION
@@ -32,8 +32,8 @@ const checkIssueUpdates = (req) => {
 
         // Split by spaces to count words. Max limit: 5 words.
         const titleWordCount = title.trim().split(/\s+/).length;
-        if (titleWordCount > 10) {
-            throw new Error("Title must be within 10 words");
+        if (titleWordCount > 5) {
+            throw new Error("Title must be within 5 words");
         }
     }
 
@@ -67,10 +67,10 @@ const checkIssueUpdates = (req) => {
             throw new Error("Description must be written");
         }
 
-        // Word count rules: Minimum 10, Maximum 100
+        // Word count rules: Minimum 10, Maximum 50
         const descrWordCount = description.trim().split(/\s+/).length;
         if (descrWordCount < 10) throw new Error('At least 10 words required in description');
-        if (descrWordCount > 100) throw new Error('Description cannot be more than 100 words');
+        if (descrWordCount > 50) throw new Error('Description cannot be more than 50 words');
     }
 
     // ============================================================
