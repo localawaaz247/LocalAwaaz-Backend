@@ -1,6 +1,6 @@
 const adminAuth = async (req, res, next) => {
     try {
-        if (!req.user || req.user.role !== 'admin') {
+        if (req.role !== 'admin') {
             return res.status(403).json(
                 {
                     success: false,

@@ -39,6 +39,7 @@ const userAuth = (req, res, next) => {
 
             // Token valid → attach userId to request for use in downstream middleware/controllers
             req.userId = decoded.id;
+            req.role = decoded.role;
 
             // Proceed to next middleware/controller
             next();

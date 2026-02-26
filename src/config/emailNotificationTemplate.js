@@ -1,32 +1,40 @@
 const generateNotificationEmail = (type, message, issueId) => {
-    // 1. Dynamic Content Based on Notification Type
-    let heading = "New Update on LocalAwaaz";
-    let icon = "🔔";
-    let badgeText = "New Update";
+  // 1. Dynamic Content Based on Notification Type
+  let heading = "New Update on LocalAwaaz";
+  let icon = "🔔";
+  let badgeText = "New Update";
 
-    if (type === 'ISSUE_CONFIRMED') {
-        heading = "Your Issue Gained Traction!";
-        icon = "✅";
-        badgeText = "Status Update";
-    } else if (type === 'ISSUE_RESOLVED') {
-        heading = "Community Victory!";
-        icon = "🎉";
-        badgeText = "Resolved";
-    } else if (type === 'NEW_COMMENT' || type === 'COMMENT_REPLY') {
-        heading = "Someone chimed in!";
-        icon = "💬";
-        badgeText = "New Interaction";
-    }
+  if (type === 'ISSUE_CONFIRMED') {
+    heading = "People are supporting your issue!";
+    icon = "👍";
+    badgeText = "Gaining Support";
+  } else if (type === 'ISSUE_RESOLVED') {
+    heading = "Your issue has been fixed!";
+    icon = "✅";
+    badgeText = "Resolved";
+  } else if (type === 'ISSUE_IN_REVIEW') {
+    heading = "Officials are looking at your issue.";
+    icon = "🔍";
+    badgeText = "In Review";
+  } else if (type === 'ISSUE_REJECTED') {
+    heading = "Your issue was closed or rejected.";
+    icon = "❌";
+    badgeText = "Rejected";
+  } else if (type === 'NEW_COMMENT' || type === 'COMMENT_REPLY') {
+    heading = "Someone left a comment!";
+    icon = "💬";
+    badgeText = "New Comment";
+  }
 
-    // 2. Generate the App Link
-    const frontendUrl = process.env.NODE_ENV === 'production' 
-        ? 'https://localawaaz.in' 
-        : 'http://localhost:5173';
-    
-    const issueLink = `${frontendUrl}/issue/${issueId}`;
+  // 2. Generate the App Link
+  const frontendUrl = process.env.NODE_ENV === 'production'
+    ? 'https://localawaaz.in'
+    : 'http://localhost:5173';
 
-    // 3. The HTML Template (Matches your OTP Template Design)
-    return `
+  const issueLink = `${frontendUrl}/issue/${issueId}`;
+
+  // 3. The HTML Template (Matches your OTP Template Design)
+  return `
 <!DOCTYPE html>
 <html lang="en">
 <head>

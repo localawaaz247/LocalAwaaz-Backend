@@ -19,7 +19,7 @@ const Notification = new mongoose.Schema({
     type: {
         type: String,
         // These are the specific, high-priority events you defined
-        enum: ['NEW_COMMENT', 'COMMENT_REPLY', 'ISSUE_CONFIRMED', 'ISSUE_RESOLVED'],
+        enum: ['NEW_COMMENT', 'COMMENT_REPLY', 'ISSUE_CONFIRMED', 'ISSUE_RESOLVED', 'ISSUE_IN_REVIEW', 'ISSUE_REJECTED'],
         required: true
     },
     message: {

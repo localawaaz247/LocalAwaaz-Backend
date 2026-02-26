@@ -86,7 +86,7 @@ const issueModel = new mongoose.Schema({
             status: String,
             changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
             changedAt: { type: Date, default: Date.now },
-            note: String
+            remark: String
         }
     ],
     media: [
@@ -106,6 +106,9 @@ const issueModel = new mongoose.Schema({
     impactScore: {
         type: Number,
         default: 10
+    },
+    adminRemark: {
+        type: String
     },
     flags: [
         {
