@@ -228,8 +228,8 @@ authRouter.post('/auth/login', async (req, res) => {
          * Access token → short lived
          * Refresh token → stored in HTTP-only cookie
          */
-        const accessToken = generateAccessToken(user._id);
-        const refreshToken = generateRefreshToken(user._id);
+        const accessToken = generateAccessToken(user._id, user.role);
+        const refreshToken = generateRefreshToken(user._id, user.role);
         const isProduction = process.env.NODE_ENV === "production"
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
@@ -282,7 +282,7 @@ authRouter.post('/refresh_token', async (req, res) => {
             });
         }
 
-        const accessToken = generateAccessToken(decoded.id);
+        const accessToken = generateAccessToken(decoded.id, decoded.role);
         return res.json({ accessToken });
 
     } catch (err) {
@@ -347,8 +347,8 @@ authRouter.get(
          * redirect user to complete profile page
          * with access token.
          */
-        const accessToken = generateAccessToken(req.user._id);
-        const refreshToken = generateRefreshToken(req.user._id);
+        const accessToken = generateAccessToken(req.user._id, req.user.role);
+        const refreshToken = generateRefreshToken(req.user._id, req.user.role);
         const EXPIRY_LIMIT = 7 * 24 * 60 * 60 * 1000
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,

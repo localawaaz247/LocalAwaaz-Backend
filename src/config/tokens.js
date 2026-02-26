@@ -15,11 +15,12 @@ const jwt = require('jsonwebtoken');
  * - Short-lived token (15 minutes)
  * - Used to authorize API requests
  * @param {string} userId - MongoDB _id of the user
+ * @param {string} role - The user's role (e.g., 'user', 'admin')
  * @returns {string} JWT access token
  */
-const generateAccessToken = (userId) => {
+const generateAccessToken = (userId, role) => {
     return jwt.sign(
-        { id: userId },                        // Payload: minimal info
+        { id: userId, role: role },                        // Payload: minimal info
         process.env.ACCESS_TOKEN_SECRET,        // Secret key from environment
         { expiresIn: '30m' }                    // Token validity
     );
@@ -30,11 +31,12 @@ const generateAccessToken = (userId) => {
  * - Long-lived token (7 days)
  * - Used to generate new access tokens without forcing login
  * @param {string} userId - MongoDB _id of the user
+ * @param {string} role - The user's role (e.g., 'user', 'admin')
  * @returns {string} JWT refresh token
  */
-const generateRefreshToken = (userId) => {
+const generateRefreshToken = (userId, role) => {
     return jwt.sign(
-        { id: userId },
+        { id: userId, role: role },
         process.env.REFRESH_TOKEN_SECRET,
         { expiresIn: '7d' }
     );
