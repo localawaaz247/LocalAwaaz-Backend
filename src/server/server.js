@@ -28,7 +28,8 @@ const io = new Server(server, {
             'https://localawaaz.in',
             'http://localhost:5173'
         ],
-        methods: ["GET", "POST"]
+        methods: ["GET", "POST"],
+        credentials: true // <-- ADDED: This is required for Socket.IO to accept cookies/sessions
     }
 });
 
@@ -114,4 +115,3 @@ const startServer = async () => {
 
 }
 startServer();
-
