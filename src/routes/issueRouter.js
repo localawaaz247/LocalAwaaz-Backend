@@ -49,7 +49,7 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
             return text.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
         }
         const regexArray = searchTokens.map(token => new RegExp(escapeRegex(token), 'i'));
-        
+
         // 3. Search for ANY of the tokens in your location fields
         const query = {
             isPublic: true,
@@ -110,26 +110,21 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
 // POST: Create Issue
 // ---------------------------------------------------------
 issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
-    // 1. Start the Transaction Session
-    const session = await mongoose.startSession();
-    session.startTransaction();
-
     try {
         const userId = req.userId;
 
-        // Validation (Strict)
+        // 1. Validation (Strict)
         checkIssueCreation(req);
 
-        // 🟢 CHANGE 1: Accept 'media' (array of URLs) instead of 'uploadToken'
         const { title, category, description, location, isAnonymous, media } = req.body;
 
-        // 🟢 CHANGE 2: Validate that media URLs exist
+        // Validate that media URLs exist
         if (!media || !Array.isArray(media) || media.length === 0) {
             throw new Error('At least one media file must be uploaded before creating an issue.');
         }
 
-        // 2. Fetch User
-        const user = await User.findById(userId).session(session);
+        // 2. Fetch User (Removed .session())
+        const user = await User.findById(userId);
         if (!user) throw new Error('User not found');
         if (!user.isEmailVerified) throw new Error('Verify email before posting');
 
@@ -160,12 +155,12 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             }
         };
 
-        // 🟢 CHANGE 3: Format the URLs for the Schema
-        // Assuming your Issue Schema defines media as [{ url: String }]
+        // Format the URLs for the Schema
         const mediaObjects = media.map(url => ({ url: url }));
 
-        // 4. Create Issue
-        const [newIssue] = await Issue.create([{
+        // 4. Create Issue 
+        // NOTE: Removed the array brackets [] around the object since we aren't using a transaction array anymore
+        const newIssue = await Issue.create({
             reportedBy: userId,
             title: title.trim(),
             isAnonymous,
@@ -173,37 +168,26 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             description: description.trim(),
             location: issueLocation,
             priority,
-            // uploadToken: uploadToken, // REMOVED
-            media: mediaObjects,       // 🟢 DIRECTLY ASSIGN URLs
-            // mediaFailed: false,        // No processing, so cannot fail
-            // mediaProcessing: false,    // No processing needed
+            media: mediaObjects,
             status: "OPEN",
             statusHistory: [{
                 status: "OPEN",
                 changedBy: userId,
                 note: "Issue reported by user"
             }]
-        }], { session });
+        });
 
-        // 5. Give Points
+        // 5. Give Points (Removed { session })
         await User.findByIdAndUpdate(userId, {
             $inc: { issuesReported: 1, civilScore: 20 }
-        }, { session });
+        });
 
-        // 🟢 CHANGE 4: The "Verify" Step (Cleanup TempMedia)
-        // We delete these specific URLs from TempMedia. 
-        // If we don't do this, the Garbage Collector will delete the actual files from R2 in 24 hours.
-        // By deleting them here, they become "Permanent".
+        // 6. The "Verify" Step (Cleanup TempMedia - Removed .session())
         if (media.length > 0) {
-            await TempMedia.deleteMany({ url: { $in: media } }).session(session);
+            await TempMedia.deleteMany({ url: { $in: media } });
         }
 
-        // 6. Commit the Transaction
-        await session.commitTransaction();
-        session.endSession();
-
         // 🚀 Check for Rank Up!
-        // (Note: Since we are outside the transaction, ensure checkAndAssignRank handles its own logic safely)
         try {
             await checkAndAssignRank(userId);
         } catch (rankError) {
@@ -213,22 +197,13 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         return res.status(201).json({
             success: true,
             message: "Your Issue has been recorded",
-            issueId: newIssue[0]._id // Access index 0 because .create returns an array when used with transactions
+            issueId: newIssue._id // NOTE: Changed from newIssue[0]._id to newIssue._id
         });
 
     } catch (err) {
-        await session.abortTransaction();
-        session.endSession();
-
-        const customErrors = [
-            'User not found',
-            'Verify email before posting',
-            'At least one media file must be uploaded before creating an issue.'
-        ];
-        const statusCode = customErrors.includes(err.message) ? 400 : 500;
-
+        // Simple error catch, no more abortTransaction needed
         console.error('Issue Creation Error:', err.message);
-        return res.status(statusCode).json({ success: false, message: err.message });
+        return res.status(500).json({ success: false, message: err.message });
     }
 });
 // ---------------------------------------------------------
