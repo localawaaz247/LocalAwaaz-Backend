@@ -24,6 +24,10 @@ const generateNotificationEmail = (type, message, issueId) => {
     heading = "Someone left a comment!";
     icon = "💬";
     badgeText = "New Comment";
+  } else if (type === 'SYSTEM_BROADCAST') {
+    heading = "Important Community Update";
+    icon = "📢";
+    badgeText = "Official Broadcast";
   }
 
   // 2. Generate the App Link
@@ -31,7 +35,7 @@ const generateNotificationEmail = (type, message, issueId) => {
     ? 'https://localawaaz.in'
     : 'http://localhost:5173';
 
-  const issueLink = `${frontendUrl}/issue/${issueId}`;
+  const issueLink = issueId ? `${frontendUrl}/issue/${issueId}` : frontendUrl;
 
   // 3. The HTML Template (Matches your OTP Template Design)
   return `
