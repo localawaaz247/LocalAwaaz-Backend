@@ -50,6 +50,7 @@ const userSchema = new mongoose.Schema({
      */
     role: {
         type: String,
+        enum: ['user', 'admin', 'moderator', 'official'],
         default: "user"
     },
 
@@ -217,7 +218,16 @@ const userSchema = new mongoose.Schema({
     savedIssues: [{
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Issue'
-    }]
+    }],
+    /**
+     * Account Status of the user
+     */
+    accountStatus: {
+        type: String,
+        enum: ['ACTIVE', 'SUSPENDED', 'BANNED'],
+        default: "ACTIVE",
+        index: true
+    }
 },
     {
         // Automatically adds createdAt & updatedAt

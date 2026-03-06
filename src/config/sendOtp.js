@@ -35,7 +35,9 @@ async function sendMail({ email, generatedOtp, purpose = "REGISTER", notificatio
         // Set dynamic subject
         emailSubject = "New Update on LocalAwaaz";
         if (type === 'ISSUE_CONFIRMED') emailSubject = "Someone confirmed your issue!";
-        if (type === 'ISSUE_RESOLVED') emailSubject = "An issue you follow was resolved!";
+        if (type === 'ISSUE_RESOLVED') emailSubject = "Your issue has been resolved!";
+        if (type === 'ISSUE_IN_REVIEW') emailSubject = "Officials are looking at your issue.";
+        if (type === 'ISSUE_REJECTED') emailSubject = "Your issue got Rejected";
         if (type === 'NEW_COMMENT' || type === 'COMMENT_REPLY') emailSubject = "New comment on your issue";
 
         // Generate the HTML
