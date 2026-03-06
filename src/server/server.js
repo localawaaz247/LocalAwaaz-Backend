@@ -17,6 +17,7 @@ const mediaRouter = require('../routes/mediaRouter');
 const startGarbageCollector = require('../utils/garbageCollector');
 const lokAiRouter = require('../routes/lokAiRouter');
 const adminRouter = require('../routes/adminRouter');
+const cron = require('node-cron');
 
 const app = express();
 const server = http.createServer(app);
@@ -98,6 +99,19 @@ app.use('/', adminRouter);
 // A simple route to keep the server awake
 app.get('/ping', (req, res) => {
     res.status(200).send('Pong! Server is awake.');
+});
+
+cron.schedule('*/14 * * * *', async () => {
+    try {
+        const serverUrl = process.env.NODE_ENV === 'production' ? 'https://localawaaz-backend.onrender.com/ping' : `http://localhost:${process.env.PORT}/ping`;
+
+        const response = await fetch(serverUrl);
+        const data = await response.text();
+
+        console.log(`[${new Date().toISOString()}] Cron ping status: ${response.status} - ${data}`);
+    } catch (error) {
+        console.error('Cron self-ping failed:', error.message);
+    }
 });
 
 const startServer = async () => {
