@@ -152,8 +152,9 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
             {
                 $geoNear: {
                     near: { type: "Point", coordinates: [userLng, userLat] },
+                    key: 'geoData',
                     distanceField: "distance",
-                    maxDistance: 5000,
+                    maxDistance: 3000,
                     spherical: true,
                     query: {
                         isDeleted: false,
@@ -360,6 +361,7 @@ userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
         const { status, page = 1, limit = 10 } = req.query;
         const query = {
             reportedBy: userId,
+            isPublic: true,
             isDeleted: false
         };
         if (status) {
@@ -673,15 +675,33 @@ userRouter.get('/locations', async (req, res) => {
             ? `https://api.postalpincode.in/pincode/${keyword}`
             : `https://api.postalpincode.in/postoffice/${keyword}`;
 
-        const response = await axios.get(url, {
-            headers: {
-                // Pretend to be a standard web browser to bypass bot-blockers
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json',
-                'Connection': 'keep-alive'
-            },
-            timeout: 8000 // 8 seconds timeout (fail gracefully if the API is frozen)
-        });
+        let response;
+        let maxRetries = 3;
+
+        for (let i = 0; i < maxRetries; i++) {
+            try {
+                response = await axios.get(url, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0',
+                        'Accept': 'application/json',
+                        'Connection': 'keep-alive'
+                    },
+                    timeout: 5000 // 5 seconds per attempt
+                });
+
+                // If the request succeeds, break out of the loop immediately
+                break;
+            } catch (error) {
+                console.warn(`Attempt ${i + 1} failed. Retrying...`);
+                // If this was the last attempt, throw the error down to your catch block
+                if (i === maxRetries - 1) {
+                    throw error;
+                }
+                // Optional: Wait 1 second before trying again so we don't spam the server
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+        }
+
         const data = response.data[0];
 
         if (data.Status === "Error" || !data.PostOffice) {

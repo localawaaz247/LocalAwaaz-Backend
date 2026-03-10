@@ -38,6 +38,7 @@ const s3 = new S3Client({
 issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
     try {
         const { search } = req.query;
+        const { userId } = req;
         if (!search) return res.status(400).json({ success: false, message: "Search term required" });
 
         // 1. Split the search term by commas or spaces into an array of words
@@ -58,7 +59,8 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
                 { 'location.city': { $in: regexArray } },
                 { 'location.address': { $in: regexArray } },
                 { 'location.pinCode': { $in: regexArray } }
-            ]
+            ],
+            reportedBy: { $ne: userId }
         };
 
         const issues = await Issue.find(query)
