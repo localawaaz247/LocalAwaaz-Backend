@@ -304,7 +304,7 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
             updates['preferences.globalAnonymous'] = isAnonymous;
         }
         if (typeof globalNotification === 'boolean') {
-            updates['preferences.globalNotification'] = globalNotification;
+            updates['preferences.globalNotifications'] = globalNotification;
         }
 
         // Optional: Address (Text based)
