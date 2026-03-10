@@ -3,7 +3,7 @@ const validate = require('validator');
 const validateLocalSignupData = (req) => {
     const { userName, password, email, name, profilePic, gender, country, state, city, pinCode } = req.body; //mobile can also be send
     const allowedGender = ['male', 'female', 'other'];
-    const userNameRegex = /^[\x21-\x7E]{4,10}$/;
+    const userNameRegex = /^[\x21-\x7E]{4,15}$/;
     if (!name || name.trim().length < 3) {
         throw new Error('Name must be at least 3 characters long');
     }
@@ -14,7 +14,7 @@ const validateLocalSignupData = (req) => {
         throw new Error('username too short');
     }
     if (!userNameRegex.test(userName)) {
-        throw new Error('username must be 4-10 characters and cannot contain spaces or emojis.');
+        throw new Error('username must be 4-15 characters and cannot contain spaces or emojis.');
     }
     if (!password) {
         throw new Error('Password is required');
