@@ -128,6 +128,10 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         if (!user) throw new Error('User not found');
         if (!user.isEmailVerified) throw new Error('Verify email before posting');
 
+        const finalIsAnonymous = user.preferences.globalAnonymous !== undefined
+            ? user.preferences.globalAnonymous
+            : isAnonymous;
+
         // 3. Priority Logic
         let priority = 'LOW';
         switch (category) {
@@ -145,7 +149,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         }
 
         const issueLocation = {
-            address: location?.address || 'Anonymous location',
+            address: finalIsAnonymous ? 'Anonymous location' : (location?.address || 'Location not provided'),
             city: location?.city,
             pinCode: location?.pinCode,
             state: location?.state,
@@ -163,7 +167,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         const newIssue = await Issue.create({
             reportedBy: userId,
             title: title.trim(),
-            isAnonymous,
+            isAnonymous: finalIsAnonymous,
             category: category,
             description: description.trim(),
             location: issueLocation,

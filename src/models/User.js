@@ -210,6 +210,10 @@ const userSchema = new mongoose.Schema({
         globalNotifications: {
             type: Boolean,
             default: true // Users are opted-in by default
+        },
+        globalAnonymous: {
+            type: Boolean,
+            default: false
         }
     },
     /**
