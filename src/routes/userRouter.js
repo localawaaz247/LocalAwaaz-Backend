@@ -264,7 +264,7 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
 
         // 1. Explicit Destructuring (Security)
         // Only extract the fields we allow users to change.
-        const { name, profilePic, gender, bio, address, password, isAnonymous } = req.body;
+        const { name, profilePic, gender, bio, address, password, isAnonymous, globalNotification } = req.body;
 
         const updates = {};
 
@@ -299,9 +299,12 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
             }
             updates.bio = bio;
         }
-        // Setting globalAnonymous
+        // Setting preferences
         if (typeof isAnonymous === 'boolean') {
             updates['preferences.globalAnonymous'] = isAnonymous;
+        }
+        if (typeof globalNotification === 'boolean') {
+            updates['preferences.globalNotification'] = globalNotification;
         }
 
         // Optional: Address (Text based)
