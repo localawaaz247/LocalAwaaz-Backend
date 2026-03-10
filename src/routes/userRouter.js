@@ -153,7 +153,7 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
                 $geoNear: {
                     near: { type: "Point", coordinates: [userLng, userLat] },
                     distanceField: "distance",
-                    maxDistance: 3000,
+                    maxDistance: 5000,
                     spherical: true,
                     query: {
                         isDeleted: false,
@@ -673,7 +673,15 @@ userRouter.get('/locations', async (req, res) => {
             ? `https://api.postalpincode.in/pincode/${keyword}`
             : `https://api.postalpincode.in/postoffice/${keyword}`;
 
-        const response = await axios.get(url);
+        const response = await axios.get(url, {
+            headers: {
+                // Pretend to be a standard web browser to bypass bot-blockers
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Connection': 'keep-alive'
+            },
+            timeout: 8000 // 8 seconds timeout (fail gracefully if the API is frozen)
+        });
         const data = response.data[0];
 
         if (data.Status === "Error" || !data.PostOffice) {
