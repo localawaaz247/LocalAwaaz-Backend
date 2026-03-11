@@ -17,6 +17,10 @@ const buildSmartQuery = (searchTerm) => {
     };
 };
 
+// 🛠️ STANDARD SELECTOR FOR ISSUE CARDS
+// We use this to ensure EVERY tool returns all the fields the frontend IssueCard needs.
+const STANDARD_ISSUE_SELECT = "title description category status createdAt media location impactScore confirmationCount isAnonymous reportedBy statusHistory";
+
 const toolHandlers = {
 
     // 1. CIVIL SCORE (User Level)
@@ -72,7 +76,6 @@ const toolHandlers = {
     },
 
     // 2. IMPACT SCORE (Specific Report)
-    // Now handles ambiguity if user has multiple similar reports
     getIssueImpact: async (args, userId) => {
         try {
             const smartSearch = buildSmartQuery(args.issueTitle);
@@ -108,7 +111,6 @@ const toolHandlers = {
     },
 
     // 3. USER REPORTS (My History)
-    
     getUserReports: async (args, userId) => {
         let textQuery = {};
         if (args.searchQuery) textQuery = buildSmartQuery(args.searchQuery);
@@ -118,7 +120,6 @@ const toolHandlers = {
         if (args.timeRange === "TODAY") {
             const startOfDay = new Date();
             startOfDay.setHours(0, 0, 0, 0);
-            // Fallback: If createdAt exists, use it. If not, this filter might miss old "dateless" items.
             dateFilter = { createdAt: { $gte: startOfDay } };
         }
 
@@ -129,24 +130,15 @@ const toolHandlers = {
             ...(args.status && { status: args.status.toUpperCase() }),
             ...dateFilter
         })
-            .select("title status category createdAt statusHistory")
-            .sort({ _id: -1 }) // Sort by _id (which is time-based) instead of createdAt to be safe
+            .select(STANDARD_ISSUE_SELECT) // <--- FIXED: Selects all media and details
+            .sort({ _id: -1 })
             .limit(5);
 
         if (!reports.length) return "You haven't submitted any reports matching that description.";
 
-        return reports.map(r => {
-            // 🛡️ SAFETY CHECK: Use createdAt if it exists, otherwise extract date from _id
-            const dateObj = r.createdAt || r._id.getTimestamp();
-            const dateString = dateObj ? dateObj.toDateString() : "Unknown Date";
-
-            return {
-                title: r.title,
-                status: r.status,
-                date: dateString, // ✅ No more crash
-                latestNote: r.statusHistory?.length ? r.statusHistory[r.statusHistory.length - 1].note : "No updates."
-            };
-        });
+        // <--- FIXED: Removed the .map() that was destroying the media arrays
+        // Returning the raw documents ensures the frontend IssueCard gets everything
+        return reports;
     },
 
     // 4. PUBLIC ISSUES (City/Locality Search)
@@ -170,7 +162,7 @@ const toolHandlers = {
         else if (args.sortBy === 'SUPPORT') sortOption = { confirmationCount: -1 };
 
         const issues = await Issue.find(query)
-            .select("title category status location.city location.address impactScore media createdAt")
+            .select(STANDARD_ISSUE_SELECT) // <--- FIXED: Standardized selection
             .sort(sortOption)
             .limit(5);
 
@@ -180,14 +172,13 @@ const toolHandlers = {
     },
 
     // 5. ISSUE STATS (For checking specific public issues)
-    // ✅ UPDATE: Added 'isPublic: true' for security
     getIssueStats: async (args, userId) => {
         try {
             console.log(`[LokAI] 🔍 Smart-Searching for: "${args.issueTitle}"`);
 
             const query = {
                 isDeleted: false,
-                isPublic: true, // 🛑 SECURITY: Only search public issues
+                isPublic: true,
                 ...buildSmartQuery(args.issueTitle)
             };
 
@@ -249,11 +240,11 @@ const toolHandlers = {
                 }
             },
             isDeleted: false,
-            isPublic: true, // 🛑 SECURITY
+            isPublic: true,
             status: { $ne: "REJECTED" }
         })
             .limit(10)
-            .select("title category impactScore status location.address media createdAt")
+            .select(STANDARD_ISSUE_SELECT); // <--- FIXED: Standardized selection
     },
 
     // 8. LEADERBOARD
