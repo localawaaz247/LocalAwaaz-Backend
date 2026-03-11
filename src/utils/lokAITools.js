@@ -170,7 +170,7 @@ const toolHandlers = {
         else if (args.sortBy === 'SUPPORT') sortOption = { confirmationCount: -1 };
 
         const issues = await Issue.find(query)
-            .select("title category status location.city location.address impactScore")
+            .select("title category status location.city location.address impactScore media createdAt")
             .sort(sortOption)
             .limit(5);
 
@@ -253,7 +253,7 @@ const toolHandlers = {
             status: { $ne: "REJECTED" }
         })
             .limit(10)
-            .select("title category impactScore status location.address");
+            .select("title category impactScore status location.address media createdAt")
     },
 
     // 8. LEADERBOARD
