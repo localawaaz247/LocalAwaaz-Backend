@@ -176,7 +176,7 @@ const generateNotificationEmail = (type, message, issueId) => {
     <strong>LocalAwaaz • Community Voice Platform</strong><br>
     India<br><br>
     <div class="footer-links">
-      <a href="#">Privacy Policy</a> • <a href="#">Terms of Service</a>
+      <a href="${frontendUrl}/privacy">Privacy Policy</a> • <a href="${frontendUrl}/terms">Terms of Service</a>
     </div>
   </div>
 
