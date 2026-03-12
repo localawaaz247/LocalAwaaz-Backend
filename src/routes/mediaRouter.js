@@ -143,4 +143,72 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
     }
 });
 
+const uploadAvatarMiddleware = upload.single('file');
+
+mediaRouter.post("/upload-avatar", userAuth, profileAuth, (req, res, next) => {
+    uploadAvatarMiddleware(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ success: false, message: "Image exceeds the maximum allowed size." });
+            }
+            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
+        } else if (err) {
+            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
+                return res.status(400).json({ success: false, message: "Only image files (JPG, PNG, WEBP, GIF) are allowed." });
+            }
+            return res.status(500).json({ success: false, message: "An unexpected error occurred during upload." });
+        }
+        next();
+    });
+}, async (req, res) => {
+    try {
+        const file = req.file;
+
+        if (!file) {
+            return res.status(400).json({ success: false, message: "No file uploaded." });
+        }
+
+        console.log(`🚀 Starting Direct Upload for Avatar...`);
+
+        const fileStream = fs.createReadStream(file.path);
+        // Prefix with 'avatar-' for easier organization in your R2 bucket
+        const uniqueFileName = `avatar-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+        const command = new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: uniqueFileName,
+            Body: fileStream,
+            ContentType: file.mimetype,
+        });
+
+        await s3.send(command);
+
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
+        console.log(`✅ Avatar Uploaded: ${uniqueFileName}`);
+
+        // Clean up local temp file immediately after success
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
+        // Send back the publicUrl exactly as the frontend expects
+        return res.status(200).json({
+            success: true,
+            message: "Profile picture uploaded successfully.",
+            publicUrl: publicUrl
+        });
+
+    } catch (error) {
+        console.error("Avatar Upload Error:", error);
+
+        // Guarantee cleanup if upload fails
+        if (req.file && fs.existsSync(req.file.path)) {
+            fs.unlinkSync(req.file.path);
+        }
+
+        return res.status(500).json({
+            success: false,
+            message: "A network issue occurred while saving your image."
+        });
+    }
+});
+
 module.exports = mediaRouter;
