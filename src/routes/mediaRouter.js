@@ -145,7 +145,7 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
 
 const uploadAvatarMiddleware = upload.single('file');
 
-mediaRouter.post("/upload-avatar", userAuth, profileAuth, (req, res, next) => {
+mediaRouter.post("/upload-avatar", userAuth, (req, res, next) => {
     uploadAvatarMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
