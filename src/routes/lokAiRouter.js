@@ -394,9 +394,9 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddlewa
 
         RULES:
         1. **Transcribe**: Listen carefully to what the user says.
-        2. **Summarize**: Create a professional title and description based on the speech.
-        3. **Category**: Classify into one of: ${JSON.stringify(allowedCategories)}.
-        4. **Description**: 10-45 words. Factual. Include location context if relevant.
+        2. **Title**: Must be within 5 words. Professional.
+        3. **Description**: Must be within 50 words. Factual. Include location context if relevant.
+        4. **Category**: Classify into one of: ${JSON.stringify(allowedCategories)}.
         5. **Safety**: If the audio is just noise, music, or abusive/NSFW, set "is_valid": false.
 
         RETURN EXACT JSON:

@@ -114,101 +114,68 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
 issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
     try {
         const userId = req.userId;
-
-        // 1. Validation (Strict)
         checkIssueCreation(req);
 
         const { title, category, description, location, isAnonymous, media } = req.body;
 
-        // Validate that media URLs exist
-        if (!media || !Array.isArray(media) || media.length === 0) {
-            throw new Error('At least one media file must be uploaded before creating an issue.');
+        const missing = [];
+        if (!location?.state) missing.push("state");
+        if (!location?.city) missing.push("city");
+        if (!location?.pinCode) missing.push("pincode");
+
+        if (missing.length > 0) {
+            return res.status(400).json({
+                success: false,
+                message: `enter ${missing.join(', ')}`
+            });
         }
 
-        // 2. Fetch User (Removed .session())
+        if (!media || !Array.isArray(media) || media.length === 0) {
+            return res.status(400).json({ success: false, message: 'upload media' });
+        }
+
         const user = await User.findById(userId);
-        if (!user) throw new Error('User not found');
-        if (!user.isEmailVerified) throw new Error('Verify email before posting');
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (!user.isEmailVerified) return res.status(403).json({ success: false, message: 'Verify email' });
 
-        const finalIsAnonymous = user.preferences.globalAnonymous !== undefined
-            ? user.preferences.globalAnonymous
-            : isAnonymous;
+        const finalIsAnonymous = user.preferences?.globalAnonymous ?? isAnonymous;
 
-        // 3. Priority Logic
         let priority = 'LOW';
         switch (category) {
-            case 'SAFETY':
-            case 'HEALTH':
-            case 'CORRUPTION': priority = 'CRITICAL'; break;
-            case 'WATER_SUPPLY':
-            case 'ELECTRICITY':
-            case 'EDUCATION':
-            case 'SANITATION': priority = 'HIGH'; break;
-            case 'ROAD_&_POTHOLES':
-            case 'GARBAGE':
-            case 'STREET_LIGHTS':
-            case 'TRAFFIC': priority = 'MEDIUM'; break;
+            case 'SAFETY': case 'HEALTH': case 'CORRUPTION': priority = 'CRITICAL'; break;
+            case 'WATER_SUPPLY': case 'ELECTRICITY': case 'EDUCATION': case 'SANITATION': priority = 'HIGH'; break;
+            case 'ROAD_&_POTHOLES': case 'GARBAGE': case 'STREET_LIGHTS': case 'TRAFFIC': priority = 'MEDIUM'; break;
         }
 
-        const issueLocation = {
-            address: finalIsAnonymous ? 'Anonymous location' : (location?.address || 'Location not provided'),
-            city: location?.city,
-            pinCode: location?.pinCode,
-            state: location?.state,
-            geoData: {
-                type: 'Point',
-                coordinates: location?.geoData?.coordinates
-            }
-        };
-
-        // Format the URLs for the Schema
-        const mediaObjects = media.map(url => ({ url: url }));
-
-        // 4. Create Issue 
-        // NOTE: Removed the array brackets [] around the object since we aren't using a transaction array anymore
         const newIssue = await Issue.create({
             reportedBy: userId,
             title: title.trim(),
             isAnonymous: finalIsAnonymous,
-            category: category,
+            category,
             description: description.trim(),
-            location: issueLocation,
+            location: {
+                address: finalIsAnonymous ? 'Anonymous location' : (location?.address || 'Location not provided'),
+                city: location.city,
+                pinCode: location.pinCode,
+                state: location.state,
+                geoData: {
+                    type: 'Point',
+                    coordinates: location?.geoData?.coordinates || [0, 0]
+                }
+            },
             priority,
-            media: mediaObjects,
+            media: media.map(url => ({ url })),
             status: "OPEN",
-            statusHistory: [{
-                status: "OPEN",
-                changedBy: userId,
-                note: "Issue reported by user"
-            }]
+            statusHistory: [{ status: "OPEN", changedBy: userId, note: "Issue reported" }]
         });
 
-        // 5. Give Points (Removed { session })
-        await User.findByIdAndUpdate(userId, {
-            $inc: { issuesReported: 1, civilScore: 20 }
-        });
+        await User.findByIdAndUpdate(userId, { $inc: { issuesReported: 1, civilScore: 20 } });
+        if (media.length > 0) await TempMedia.deleteMany({ url: { $in: media } });
+        try { await checkAndAssignRank(userId); } catch (e) { }
 
-        // 6. The "Verify" Step (Cleanup TempMedia - Removed .session())
-        if (media.length > 0) {
-            await TempMedia.deleteMany({ url: { $in: media } });
-        }
-
-        // 🚀 Check for Rank Up!
-        try {
-            await checkAndAssignRank(userId);
-        } catch (rankError) {
-            console.error("Rank update failed (non-critical):", rankError.message);
-        }
-
-        return res.status(201).json({
-            success: true,
-            message: "Your Issue has been recorded",
-            issueId: newIssue._id // NOTE: Changed from newIssue[0]._id to newIssue._id
-        });
+        return res.status(201).json({ success: true, message: "recorded", issueId: newIssue._id });
 
     } catch (err) {
-        // Simple error catch, no more abortTransaction needed
-        console.error('Issue Creation Error:', err.message);
         return res.status(500).json({ success: false, message: err.message });
     }
 });
