@@ -68,7 +68,7 @@ const options = {
     keys: ['questions'],
     // ⬇️ RELAXED THRESHOLD: 0.0 is exact match, 1.0 is match anything.
     // 0.4 allows for typos and extra words like "can i" or "please".
-    threshold: 0.4,
+    threshold: 0.3,
     distance: 100,
     ignoreLocation: true
 };
