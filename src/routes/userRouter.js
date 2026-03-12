@@ -659,6 +659,42 @@ userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
     }
 });
 
+// DELETE a specific notification
+userRouter.delete('/me/notifications/:id', userAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        // Ensure the notification belongs to the user trying to delete it
+        const deleted = await Notification.findOneAndDelete({
+            _id: id,
+            recipient: req.userId
+        });
+
+        if (!deleted) {
+            return res.status(404).json({ success: false, message: "Notification not found" });
+        }
+
+        return res.status(200).json({ success: true, message: "Notification deleted" });
+
+    } catch (err) {
+        console.error("Delete notification error:", err);
+        return res.status(500).json({ success: false, message: "Error deleting notification" });
+    }
+});
+
+// DELETE all notifications for the user
+userRouter.delete('/me/notifications', userAuth, async (req, res) => {
+    try {
+        await Notification.deleteMany({ recipient: req.userId });
+
+        return res.status(200).json({ success: true, message: "All notifications cleared" });
+
+    } catch (err) {
+        console.error("Clear notifications error:", err);
+        return res.status(500).json({ success: false, message: "Error clearing notifications" });
+    }
+});
+
 /**
  * Get locations from keywords
  */
