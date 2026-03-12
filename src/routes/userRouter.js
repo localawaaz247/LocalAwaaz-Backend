@@ -29,7 +29,8 @@ userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
             country,
             state,
             city,
-            pinCode
+            pinCode,
+            profilePic
         } = req.body;
 
         /**
@@ -115,6 +116,9 @@ userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
         user.contact.city = city;
         user.contact.pinCode = pinCode;
 
+        if (profilePic) {
+            user.profilePic = profilePic;
+        }
         // Mark profile as completed
         user.isProfileComplete = true;
 
