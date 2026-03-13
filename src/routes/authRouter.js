@@ -358,12 +358,12 @@ authRouter.get(
         })
         if (!req.user.isProfileComplete) {
             return res.redirect(
-                `${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=false`
+                `${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=false&role=${req.user.role}`
             );
         }
 
         // Profile complete → go to dashboard
-        res.redirect(`${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=true`);
+        res.redirect(`${process.env.FRONTEND_URL}/google/callback?token=${accessToken}&isProfileComplete=true&role=${req.user.role}`);
     }
 );
 
