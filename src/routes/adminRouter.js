@@ -364,19 +364,15 @@ adminRouter.get('/admin/user/:id', userAuth, adminAuth, async (req, res) => {
 adminRouter.patch('/admin/user/:id/status', userAuth, adminAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const { accountStatus } = req.body; // e.g., 'ACTIVE', 'SUSPENDED', 'BANNED'
+        const { accountStatus } = req.body;
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid User Id" });
         }
+
         const validStatus = ['ACTIVE', 'SUSPENDED', 'BANNED'];
         if (!validStatus.includes(accountStatus?.toUpperCase())) {
-            return res.json(
-                {
-                    success: false,
-                    message: 'Invalid account status. Must be ACTIVE, SUSPENDED, or BANNED.'
-                }
-            )
+            return res.status(400).json({ success: false, message: 'Invalid account status.' });
         }
 
         const updatedUser = await User.findByIdAndUpdate(
@@ -386,27 +382,51 @@ adminRouter.patch('/admin/user/:id/status', userAuth, adminAuth, async (req, res
         ).select('-password');
 
         if (!updatedUser) {
-            return res.status(400).json(
-                {
-                    success: false,
-                    message: "User not found"
-                }
-            )
+            return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        return res.status(200).json(
-            {
-                success: true,
-                message: `User status updated to ${accountStatus}`,
-                data: updatedUser
+        // 👇 TRIGGER NOTIFICATION BLOCK ADDED HERE
+        try {
+            const io = req.app.get('io');
+            let notificationType = null;
+            let message = "";
+
+            if (accountStatus === 'SUSPENDED') {
+                notificationType = 'ACCOUNT_SUSPENDED';
+                message = "Your account has been temporarily suspended due to a policy violation.";
+            } else if (accountStatus === 'BANNED') {
+                notificationType = 'ACCOUNT_BANNED';
+                message = "Your account has been permanently banned due to severe policy violations.";
+            } else if (accountStatus === 'ACTIVE') {
+                notificationType = 'ACCOUNT_RESTORED';
+                message = "Your account status has been restored to Active. Welcome back!";
             }
-        );
+
+            if (notificationType) {
+                triggerNotification({
+                    recipientId: updatedUser._id,
+                    senderId: req.userId, // Admin ID
+                    issueId: null, // Global notification
+                    type: notificationType,
+                    message: message,
+                    io: io
+                }).catch(err => console.error("Status notification error:", err));
+            }
+        } catch (notificationError) {
+            console.error("Non-fatal error triggering account notification:", notificationError);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `User status updated to ${accountStatus}`,
+            data: updatedUser
+        });
     }
     catch (err) {
         console.log('Server Error : Cannot update the user status', err);
         return res.status(500).json({ success: false, message: "Server Error : Could not update the user status" });
     }
-})
+});
 
 // Permanently delete a user and their associated data
 adminRouter.delete('/admin/user/:id', userAuth, adminAuth, async (req, res) => {

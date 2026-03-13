@@ -164,7 +164,7 @@ const passwordResetTemplate = (otp) => {
     <strong>LocalAwaaz • Community Voice Platform</strong><br>
     India<br><br>
     <div class="footer-links">
-      <a href="#">Privacy Policy</a> • <a href="#">Terms of Service</a> • <a href="#">Support</a>
+      <a href="${process.env.FRONTEND_URL}/privacy">Privacy Policy</a> • <a href="${process.env.FRONTEND_URL}/terms">Terms of Service</a> • <a href="mailto:support@localawaaz.in">Support</a>
     </div>
   </div>
 

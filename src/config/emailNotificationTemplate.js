@@ -3,6 +3,7 @@ const generateNotificationEmail = (type, message, issueId) => {
   let heading = "New Update on LocalAwaaz";
   let icon = "🔔";
   let badgeText = "New Update";
+  let buttonText = "View in App"; // Default button text
 
   if (type === 'ISSUE_CONFIRMED') {
     heading = "People are supporting your issue!";
@@ -28,16 +29,41 @@ const generateNotificationEmail = (type, message, issueId) => {
     heading = "Important Community Update";
     icon = "📢";
     badgeText = "Official Broadcast";
+  } else if (type === 'ISSUE_FLAGGED') {
+    heading = "Your issue has been flagged.";
+    icon = "⚠️";
+    badgeText = "Needs Attention";
+    buttonText = "Review Guidelines";
+  } else if (type === 'ACCOUNT_SUSPENDED') {
+    heading = "Your account has been suspended.";
+    icon = "🛑";
+    badgeText = "Account Suspended";
+    buttonText = "Review Guidelines";
+  } else if (type === 'ACCOUNT_BANNED') {
+    heading = "Your account has been banned.";
+    icon = "🚫";
+    badgeText = "Account Banned";
+    buttonText = "Review Guidelines";
+  } else if (type === 'ACCOUNT_RESTORED') {
+    heading = "Your account has been restored.";
+    icon = "🎉";
+    badgeText = "Account Active";
   }
 
-  // 2. Generate the App Link
+  // 2. Generate the Base URLs
   const frontendUrl = process.env.NODE_ENV === 'production'
     ? 'https://localawaaz.in'
     : 'http://localhost:5173';
 
-  const issueLink = issueId ? `${frontendUrl}/issue/${issueId}` : frontendUrl;
+  // 3. Dynamic Button Link Logic
+  let buttonLink = issueId ? `${frontendUrl}/issue/${issueId}` : frontendUrl;
 
-  // 3. The HTML Template (Matches your OTP Template Design)
+  // If the user is penalized, redirect them to the terms instead of the app feed
+  if (type === 'ACCOUNT_SUSPENDED' || type === 'ACCOUNT_BANNED' || type === 'ISSUE_FLAGGED') {
+    buttonLink = `${frontendUrl}/terms`;
+  }
+
+  // 4. The HTML Template
   return `
 <!DOCTYPE html>
 <html lang="en">
@@ -159,7 +185,7 @@ const generateNotificationEmail = (type, message, issueId) => {
         </div>
 
         <div>
-          <a href="${issueLink}" class="cta-button">View in App</a>
+          <a href="${buttonLink}" class="cta-button">${buttonText}</a>
         </div>
 
         <div class="tip-notice">

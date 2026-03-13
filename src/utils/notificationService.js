@@ -49,7 +49,11 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
                 'ISSUE_IN_REVIEW',
                 'NEW_COMMENT',
                 'COMMENT_REPLY',
-                'SYSTEM_BROADCAST'
+                'SYSTEM_BROADCAST',
+                'ISSUE_FLAGGED',
+                'ACCOUNT_SUSPENDED',
+                'ACCOUNT_BANNED',
+                'ACCOUNT_RESTORED'
             ];
 
             if (highPriorityEmailTypes.includes(type)) {

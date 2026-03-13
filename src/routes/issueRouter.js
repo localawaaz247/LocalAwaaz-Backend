@@ -519,25 +519,34 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
                 isDeleted: false
             },
             {
-                $push: {
-                    flags: { flagReason: flag, flaggedBy: userId }
-                },
+                $push: { flags: { flagReason: flag, flaggedBy: userId } },
                 $inc: { flagCount: 1 }
             },
             { new: true }
         );
 
         if (updatedIssue) {
-            // Give Points for Flagging (Helpful Moderation)
+            // Give Points for Flagging
             await User.findByIdAndUpdate(userId, {
-                $inc: {
-                    civilScore: 2,
-                    issuesFlagged: 1
-                }
+                $inc: { civilScore: 2, issuesFlagged: 1 }
             });
 
-            // 🚀 NEW: Check for Rank Up!
             await checkAndAssignRank(userId);
+
+            // 👇 TRIGGER NOTIFICATION BLOCK ADDED HERE
+            try {
+                const io = req.app.get('io');
+                triggerNotification({
+                    recipientId: updatedIssue.reportedBy,
+                    senderId: userId,
+                    issueId: updatedIssue._id,
+                    type: 'ISSUE_FLAGGED',
+                    message: `Your issue was flagged by the community for: ${flag}. Please ensure your post meets community guidelines.`,
+                    io: io
+                }).catch(err => console.error("Flag notification error:", err));
+            } catch (notificationError) {
+                console.error("Non-fatal error triggering flag notification:", notificationError);
+            }
 
             return res.status(200).json({
                 success: true,
