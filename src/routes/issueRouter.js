@@ -138,7 +138,8 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
         if (!user) return res.status(404).json({ success: false, message: 'User not found' });
         if (!user.isEmailVerified) return res.status(403).json({ success: false, message: 'Verify email' });
 
-        const finalIsAnonymous = user.preferences?.globalAnonymous ?? isAnonymous;
+        // FIX: If the frontend sends a boolean (true/false), use it. Otherwise, fallback to global preference, then false.
+        const finalIsAnonymous = typeof isAnonymous === 'boolean' ? isAnonymous : (user.preferences?.globalAnonymous || false);
 
         let priority = 'LOW';
         switch (category) {
@@ -441,6 +442,9 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
     try {
         const { userId } = req;
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue ID format" });
+        }
 
         const confirmedIssue = await Issue.findOneAndUpdate(
             {
@@ -506,6 +510,9 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
     try {
         const { userId } = req;
         const { id } = req.params;
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue ID format" });
+        }
         const flag = checkIssueFlags(req);
 
         if (!flag) {
