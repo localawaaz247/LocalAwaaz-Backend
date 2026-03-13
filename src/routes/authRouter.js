@@ -11,6 +11,7 @@ const passport = require('passport');
 const LoginAttempt = require('../models/LoginAttempt'); // tracks failed login attempts
 const { sendMail } = require('../config/sendOtp');
 const validator = require('validator')
+const Inquiry = require('../models/Inquiry');
 
 const authRouter = express.Router();
 
@@ -543,4 +544,43 @@ authRouter.patch('/reset-password/update', async (req, res) => {
     }
 
 })
+
+authRouter.post('/inquiry', async (req, res) => {
+    try {
+        const { name, email, message } = req.body;
+
+        console.log("📥 Received Inquiry Data:", req.body); // <-- Add this to see if data reaches backend
+
+        // 1. Basic validation
+        if (!name || !email || !message) {
+            return res.status(400).json({
+                success: false,
+                message: "Name, email, and message are required."
+            });
+        }
+
+        // 2. Save to database
+        const newInquiry = await Inquiry.create({
+            name,
+            email,
+            message
+        });
+
+        console.log("✅ Inquiry saved to DB:", newInquiry._id);
+
+        // 3. Send success response
+        return res.status(201).json({
+            success: true,
+            message: "Message sent successfully!",
+            data: newInquiry
+        });
+
+    } catch (err) {
+        console.error("❌ Error saving inquiry:", err);
+        return res.status(500).json({
+            success: false,
+            message: "Server Error: Could not submit your message."
+        });
+    }
+});
 module.exports = authRouter;
