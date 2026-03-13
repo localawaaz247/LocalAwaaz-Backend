@@ -633,7 +633,7 @@ adminRouter.post('/admin/broadcast', userAuth, adminAuth, async (req, res) => {
 });
 
 // Fetch all inquiries from the landing page, sorted by newest first
-adminRouter.get('/admin/inquiries', userAuth, adminAuth, async (req, res) => {
+adminRouter.get('/admin/inquiries', async (req, res) => {
     try {
         // 1. Grab optional query parameters for filtering and pagination
         // Example URL: /admin/inquiries?status=unread&page=1&limit=20
