@@ -196,7 +196,9 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
                     createdAt: 1,
                     distance: 1, // Calculated by $geoNear
                     isAnonymous: 1,
-
+                    hasConfirmed: {
+                        $in: [userId, { $ifNull: ["$confirmations.user", []] }]
+                    },
                     // CONDITIONAL AUTHOR DISPLAY
                     reportedBy: {
                         $cond: {
