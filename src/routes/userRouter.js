@@ -243,26 +243,23 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/me/profile', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/me/profile', userAuth, async (req, res) => {
     try {
         const { userId } = req;
         const user = await User.findById(userId).select("-password");
         if (!user) {
             return res.status(404).json({ success: false, message: "User profile not found" });
         }
-        return res.status(200).json(
-            {
-                success: true,
-                message: "User Profile sent successfully",
-                data: user
-            }
-        )
+        return res.status(200).json({
+            success: true,
+            message: "User Profile sent successfully",
+            data: user
+        });
     }
     catch (err) {
         console.log("Profile error : ", err);
         return res.status(500).json({ success: false, message: "Error in fetching profile" });
     }
-
 })
 
 userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
