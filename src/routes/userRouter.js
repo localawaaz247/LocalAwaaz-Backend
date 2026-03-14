@@ -267,8 +267,8 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
         const { userId } = req;
 
         // 1. Explicit Destructuring (Security)
-        // Only extract the fields we allow users to change.
-        const { name, profilePic, gender, bio, address, password, isAnonymous, globalNotification } = req.body;
+        // -> Added 'language' to the extracted fields
+        const { name, profilePic, gender, bio, address, password, isAnonymous, globalNotification, language } = req.body;
 
         const updates = {};
 
@@ -303,12 +303,22 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
             }
             updates.bio = bio;
         }
+
         // Setting preferences
         if (typeof isAnonymous === 'boolean') {
             updates['preferences.globalAnonymous'] = isAnonymous;
         }
         if (typeof globalNotification === 'boolean') {
             updates['preferences.globalNotifications'] = globalNotification;
+        }
+        
+        // -> NEW: Handle Language update
+        if (language) {
+            const allowedLanguages = ['en', 'hi']; // Based on your schema enum
+            if (!allowedLanguages.includes(language)) {
+                return res.status(400).json({ success: false, message: "Invalid Language preference" });
+            }
+            updates['preferences.language'] = language;
         }
 
         // Optional: Address (Text based)
@@ -318,6 +328,7 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
             if (address.country) updates['contact.country'] = address.country;
             if (address.pinCode) updates['contact.pinCode'] = address.pinCode;
         }
+
         //Password Update
         if (password) {
             const passwordOptions = {
@@ -333,6 +344,7 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
             const hashedPass = await bcrypt.hash(password, 10);
             updates.password = hashedPass;
         }
+
         // 3. Database Update
         // { new: true } returns the updated document
         // .select("-password") ensures we don't send back the hash
