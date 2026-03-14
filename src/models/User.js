@@ -214,6 +214,11 @@ const userSchema = new mongoose.Schema({
         globalAnonymous: {
             type: Boolean,
             default: false
+        },
+        language: {
+            type: String,
+            enum: ['en', 'hi'],
+            default: 'en'
         }
     },
     /**
