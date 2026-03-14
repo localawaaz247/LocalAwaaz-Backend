@@ -217,7 +217,7 @@ const userSchema = new mongoose.Schema({
         },
         language: {
             type: String,
-            enum: ['en', 'hi'],
+            enum: ['en', 'hi', 'awa', 'bho', 'mr', 'raj', 'har', 'gu', 'te', 'ta', 'kn', 'bn'],
             default: 'en'
         }
     },

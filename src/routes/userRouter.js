@@ -311,10 +311,10 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
         if (typeof globalNotification === 'boolean') {
             updates['preferences.globalNotifications'] = globalNotification;
         }
-        
+
         // -> NEW: Handle Language update
         if (language) {
-            const allowedLanguages = ['en', 'hi']; // Based on your schema enum
+            const allowedLanguages = ['en', 'hi', 'awa', 'bho', 'mr', 'raj', 'har', 'gu', 'te', 'ta', 'kn', 'bn'];
             if (!allowedLanguages.includes(language)) {
                 return res.status(400).json({ success: false, message: "Invalid Language preference" });
             }
