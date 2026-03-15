@@ -24,7 +24,7 @@ const locationAuth = async (req, res, next) => {
             "isDeleted": false
         })
         if (!issue) {
-            return res.status(403).json({ success: false, message: "You are far away" });
+            return res.status(400).json({ success: false, message: "You are far away" });
         }
         req.issue = issue;
         next();

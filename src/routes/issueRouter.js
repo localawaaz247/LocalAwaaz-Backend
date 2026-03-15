@@ -148,6 +148,15 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
             case 'ROAD_&_POTHOLES': case 'GARBAGE': case 'STREET_LIGHTS': case 'TRAFFIC': priority = 'MEDIUM'; break;
         }
 
+        // --- NEW: Calculate initial impact score before creation ---
+        const initialImpactScore = calculateImpactScore({
+            shareCount: 0,
+            confirmationCount: 0,
+            flagCount: 0,
+            priority: priority
+        });
+        // -----------------------------------------------------------
+
         const newIssue = await Issue.create({
             reportedBy: userId,
             title: title.trim(),
@@ -165,6 +174,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
                 }
             },
             priority,
+            impactScore: initialImpactScore, // <-- NEW: Injected calculated score
             media: media.map(url => ({ url })),
             status: "OPEN",
             statusHistory: [{ status: "OPEN", changedBy: userId, note: "Issue reported" }]
@@ -460,6 +470,11 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
         );
 
         if (confirmedIssue) {
+            // --- NEW: Recalculate and save impact score ---
+            confirmedIssue.impactScore = calculateImpactScore(confirmedIssue);
+            await confirmedIssue.save();
+            // ----------------------------------------------
+
             // Give Points to the CONFIRMER
             await User.findByIdAndUpdate(userId, {
                 $inc: {
@@ -470,12 +485,6 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
 
             // 🚀 NEW: Check for Rank Up!
             await checkAndAssignRank(userId);
-
-            // Optional: Also give points to the Reporter (Community Support)
-            // const reporter = await User.findById(confirmedIssue.reportedBy);
-            // reporter.civilScore += 2;
-            // await reporter.save();
-            // await checkAndAssignRank(reporter._id);
 
             triggerNotification({
                 recipientId: confirmedIssue.reportedBy,
@@ -533,6 +542,11 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
         );
 
         if (updatedIssue) {
+            // --- NEW: Recalculate and save impact score ---
+            updatedIssue.impactScore = calculateImpactScore(updatedIssue);
+            await updatedIssue.save();
+            // ----------------------------------------------
+
             // Give Points for Flagging
             await User.findByIdAndUpdate(userId, {
                 $inc: { civilScore: 2, issuesFlagged: 1 }
@@ -699,25 +713,8 @@ issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
             });
         }
 
-        /**
-         * Attempt to create a share log entry.
-         * - This collection has:
-         *   1) TTL index (auto-expiry after cooldown)
-         *   2) Unique compound index (userId + issueId)
-         *
-         * If the user already shared within the TTL window,
-         * MongoDB throws E11000 (duplicate key error).
-         */
         await Share.create({ userId, issueId: id });
 
-        /**
-         * Increment share count only if share log creation succeeds.
-         * This ensures:
-         * - Accurate shareCount
-         * - No double counting during cooldown
-         *
-         * Using findOneAndUpdate keeps this operation atomic.
-         */
         const issue = await Issue.findOneAndUpdate(
             { _id: id, isDeleted: false },
             { $inc: { shareCount: 1 } },
@@ -732,6 +729,11 @@ issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
             });
         }
 
+        // --- NEW: Recalculate and save impact score ---
+        issue.impactScore = calculateImpactScore(issue);
+        await issue.save();
+        // ----------------------------------------------
+
         // Successful share
         return res.status(200).json({
             success: true,
@@ -740,13 +742,6 @@ issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
         });
     }
     catch (err) {
-        /**
-         * Duplicate key error (E11000) occurs when:
-         * - The same user tries to share the same issue
-         * - Within the TTL cooldown window
-         *
-         * Treated as a throttled but successful request
-         */
         if (err.code === 11000) {
             return res.status(200).json({
                 success: true,
