@@ -24,6 +24,8 @@ const LANG_MAP = {
     te: 'Telugu', ta: 'Tamil', kn: 'Kannada', bn: 'Bengali'
 };
 
+const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'];
+
 const lokAiLimiter = rateLimit({
     windowMs: 1 * 60 * 1000,
     max: 20,
@@ -123,7 +125,10 @@ const toolDefinitions = [
             properties: {
                 title: { type: "STRING" },
                 description: { type: "STRING" },
-                category: { type: "STRING" },
+                category: { 
+                    type: "STRING",
+                    enum: allowedCategories
+                },
                 isAnonymous: { type: "BOOLEAN" },
                 address: { type: "STRING" },
                 city: { type: "STRING" },
@@ -149,9 +154,6 @@ async function generateWithRetry(message, history, tools, systemInstruction, att
     }
 }
 
-// ============================================================================
-// 🟢 ROUTE 1: SMART IMAGE ANALYSIS
-// ============================================================================
 lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) return res.status(400).json({ success: false, message: "No images uploaded" });
@@ -163,19 +165,17 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
         const userLangCode = user?.preferences?.language || 'en';
         const preferredLanguage = LANG_MAP[userLangCode] || 'English';
 
-        const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'];
-
         const prompt = `
         Analyze this civic issue image for 'LocalAwaaz'.
         CONTEXT: User Hint: """${userHint || ''}""" | Location: ${address || ''} (${city || ''}, ${state || ''}) | Preferred Language: ${preferredLanguage}
 
         RULES:
         1. Safety: If NSFW/Irrelevant, set "is_valid": false.
-        2. Language: Generate the title, description, and chat_message entirely in ${preferredLanguage}.
-        3. Title: Max 5 words. Professional.
-        4. Description: 10-45 words. Factual. Include location context if relevant.
-        5. Category: Must be one of: ${JSON.stringify(allowedCategories)}.
-        6. Chat Message: Generate a friendly message in ${preferredLanguage} stating what issue you found. Then explicitly ask: "Do you want to report this issue anonymously?" providing two clear options: "[Yes] / [No]". Ensure the [Yes]/[No] words inside the brackets are translated to ${preferredLanguage}. (Do not ask for location yet).
+        2. Language: You MUST generate the title, description, and chat_message entirely in ${preferredLanguage}, irrespective of the language the user used in their hint. IMPORTANT: DO NOT translate the 'category' value. It MUST remain in English.
+        3. Title: Max 5 words in ${preferredLanguage}. Professional.
+        4. Description: 10-45 words in ${preferredLanguage}. Factual. Include location context if relevant.
+        5. Category: Must be EXACTLY one of: ${JSON.stringify(allowedCategories)}.
+        6. Chat Message: Generate a friendly message in ${preferredLanguage} stating what issue you found. Then explicitly ask: "Do you want to report this issue anonymously?" providing two clear options exactly like this: "[Yes] / [No]". Ensure the [Yes]/[No] words inside the brackets are translated to ${preferredLanguage}. (Do not ask for location yet).
 
         RETURN EXACT JSON:
         { "is_valid": boolean, "rejection_reason": stringOrNull, "chat_message": string, "data": { "title": string, "description": string, "category": string, "subCategory": stringOrNull } }`;
@@ -190,7 +190,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
 
         if (!aiData.is_valid) return res.status(400).json({ success: false, message: aiData.rejection_reason || "Image is not a valid civic issue." });
 
-        aiData.data.location = { address: address || "", city: city || "", state: state || "", coordinates: [parseFloat(lng || 0), parseFloat(lat || 0)] };
+        aiData.data.location = { address: address || "", city: city || "", state: state || "", coordinates: [parseFloat(lng || 0), parseFloat(lat || 0)], auto_detected: true };
 
         return res.status(200).json({ success: true, message: "Analysis successful", analysis: aiData.data, chat_message: aiData.chat_message });
     } catch (error) {
@@ -198,17 +198,17 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
     } finally { cleanupFiles(req.files); }
 });
 
-// ============================================================================
-// 🔵 ROUTE 2: CHAT BOT
-// ============================================================================
 lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, res) => {
     try {
         const { message, history, lng, lat, city } = req.body;
         const currentUserId = req.userId;
 
         const user = await User.findById(currentUserId).select("name contact.city civilScore preferences");
-        const faqAnswer = getFuzzyFAQ(message);
-        if (faqAnswer) return res.json({ reply: faqAnswer, data: null, toolUsed: "fuzzy_faq" });
+
+        if (!history || history.length === 0) {
+            const faqAnswer = getFuzzyFAQ(message);
+            if (faqAnswer) return res.json({ reply: faqAnswer, data: null, toolUsed: "fuzzy_faq" });
+        }
 
         const userName = user?.name || "Citizen";
         const userCity = user?.contact?.city || "your city";
@@ -222,19 +222,26 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
         USER: ${userName} | LOC: ${activeCity} | LAT/LNG: ${lat},${lng} | PREFERRED LANGUAGE: ${preferredLanguage}
         ${locationInstruction}
 
-       YOUR PERSONA & DOMAIN:
+       YOUR PERSONA, DOMAIN & RULES:
+        - DO NOT SHOW YOUR THINKING ANYWHERE EVEN WHEN ASKED JUST REPLY ABOUT QUERY.
         - Be warm, encouraging, and conversational.
-        - STRICT LANGUAGE RULE: You MUST communicate entirely in the user's PREFERRED LANGUAGE (${preferredLanguage}). This includes translating their input.
-        - TRANSLATION RULE FOR REPORT DATA: The Title, Description, and Location details MUST be written in ${preferredLanguage}. DO NOT translate numeric Pincodes.
-        
+        - STRICT LANGUAGE RULE: You MUST communicate entirely in the user's PREFERRED LANGUAGE (${preferredLanguage}), irrespective of the language the user uses to ask you questions.
+        - DOMAIN RESTRICTION: Stick strictly to civic issues, LocalAwaaz policies, privacy, and civic duties. If the user talks about out-of-domain topics, politely decline and steer them back to civic reporting.
+        - FULL AUTO-DRAFTING (SILENT): NEVER ask the user to provide a "Title", "Description", or "Category". You MUST automatically and silently generate a professional Title, a detailed Description, and infer the correct Category based on their conversational input. NEVER show the list of categories to the user.
+
         DRAFTING FLOW RULES (FOLLOW IN STRICT ORDER):
-        1. AUDIO IMAGE STEP: If the user input contains exactly "System: Images uploaded successfully", immediately acknowledge it and ask ONLY: "Do you want to report this issue anonymously?" providing two clear options: "[Yes] / [No]".
-        2. ANONYMITY STEP: If the user answers Yes/No to the Anonymity question: Acknowledge their choice in ${preferredLanguage}, and then immediately ask them to provide their general location details (State, City, Pincode) to proceed.
-        3. SPECIFIC ADDRESS STEP: When the user provides their general location (State, City, Pincode), DO NOT finalize yet. Acknowledge the location, and then explicitly ask ONLY: "Do you want to add a specific nearby address or landmark?" providing two clear options: "[Yes] / [No]". Ensure the [Yes]/[No] words inside the brackets are translated to ${preferredLanguage}.
-        4. SPECIFIC ADDRESS RESPONSE:
-           - If the user says "Yes" to adding a specific address, politely ask them to type it in.
-           - If the user says "No" to adding a specific address, proceed immediately to the FINALIZE STEP.
-        5. FINALIZE STEP: Once the user either declines to provide a specific address OR provides the specific address, you MUST execute the 'finalizeReportDraft' tool. Pass the Translated Title, Description, Category, isAnonymous boolean, State, City, Pincode, and the translated Specific Address (if provided). Do not ask for Submit/Modify in text, just execute the tool!
+        1. UNDERSTAND THE ISSUE: If the user hasn't described the civic problem yet, auto generate it and move the next step.
+        2. AUDIO IMAGE STEP: If input is "System: Images uploaded successfully", proceed directly to the Anonymity step.
+        3. ANONYMITY STEP: Once you understand the civic issue (from their text, audio, or image), ask ONLY: "Do you want to report this issue anonymously? [Yes] / [No]". (Translate the question and options into ${preferredLanguage}, keeping the square brackets e.g. [हाँ] / [नहीं]).
+        4. LOCATION VALIDATION STEP: After they answer about anonymity (infer if their answer means true or false), ask ONLY for their location in this exact format: "State, City, Pincode".
+           - You MUST receive exactly three parts.
+           - Verify if they are real geographic locations.
+           - If any part is missing, or the format is wrong, or if you detect spam, politely ask the user in ${preferredLanguage} to re-enter details exactly in the "State, City, Pincode" format.
+        5. ISSUE LANDMARK STEP: Once the State, City, and Pincode are valid, ask ONLY: "Do you want to add a specific nearby landmark or street name to help locate the issue easily? [Yes] / [No]". (Translate the question and options into ${preferredLanguage}, keeping the square brackets e.g. [हाँ] / [नहीं]).
+        6. ISSUE LANDMARK RESPONSE:
+           - If they answer "Yes" (or the translated equivalent), ask them to type the specific landmark/street name where the issue is present.
+           - If they answer "No" (or after they have provided the landmark), proceed immediately to FINALIZE.
+        7. FINALIZE STEP: Execute 'finalizeReportDraft' tool. Pass your auto-generated Title (in ${preferredLanguage}), auto-generated Description (in ${preferredLanguage}), inferred Category (MUST be exactly one of: ${JSON.stringify(allowedCategories)} - DO NOT translate this value), isAnonymous (boolean), State (translated to ${preferredLanguage}), City (translated to ${preferredLanguage}), Pincode, and Address (THIS MUST BE TRANSLATED TO ${preferredLanguage} if they provided one, otherwise pass an empty string).
         
         RULES & FACTS: Use 'getPublicCivicIssues' (sortBy='IMPACT') for discovery. Keep responses structured.`;
 
@@ -274,9 +281,6 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
     }
 });
 
-// ============================================================================
-// 🟣 ROUTE 3: SMART AUDIO ANALYSIS
-// ============================================================================
 lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddleware, async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ success: false, message: "No audio file uploaded" });
@@ -288,18 +292,16 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddlewa
         const userLangCode = user?.preferences?.language || 'en';
         const preferredLanguage = LANG_MAP[userLangCode] || 'English';
 
-        const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'];
-
         const prompt = `
         Listen to this audio report for 'LocalAwaaz'. 
         CONTEXT: User Hint: """${userHint || ''}""" | Location: ${address || ''} (${city || ''}, ${state || ''}) | Preferred Language: ${preferredLanguage}
 
         RULES:
         1. Transcribe: Listen carefully to what the user says.
-        2. Language: Generate the title, description, and chat_message entirely in ${preferredLanguage}.
-        3. Title: Must be within 5 words. Professional.
-        4. Description: Must be within 50 words. Factual. Include location context if relevant.
-        5. Category: Classify into one of: ${JSON.stringify(allowedCategories)}.
+        2. Language: You MUST generate the title, description, and chat_message entirely in ${preferredLanguage}, irrespective of the language the user used in their hint. IMPORTANT: DO NOT translate the 'category' value. It MUST remain in English.
+        3. Title: Must be within 5 words in ${preferredLanguage}. Professional.
+        4. Description: Must be within 50 words in ${preferredLanguage}. Factual. Include location context if relevant.
+        5. Category: Classify into EXACTLY one of: ${JSON.stringify(allowedCategories)}.
         6. Chat Message: Generate a friendly message in ${preferredLanguage} stating what issue you found. Then explicitly ask the user to upload at least 1 image (up to 3) of the issue using the + icon to proceed. (Mention the combined size limit is 30MB). Do NOT ask about anonymity yet.
 
         RETURN EXACT JSON:
@@ -315,7 +317,7 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddlewa
 
         if (!aiData.is_valid) return res.status(400).json({ success: false, message: aiData.rejection_reason || "Audio is not a valid civic report." });
 
-        aiData.data.location = { address: address || "", city: city || "", state: state || "", coordinates: [parseFloat(lng || 0), parseFloat(lat || 0)] };
+        aiData.data.location = { address: address || "", city: city || "", state: state || "", coordinates: [parseFloat(lng || 0), parseFloat(lat || 0)], auto_detected: true };
 
         return res.status(200).json({ success: true, message: "Audio analysis successful", analysis: aiData.data, chat_message: aiData.chat_message });
     } catch (error) {
