@@ -9,6 +9,7 @@ const User = require("../models/User");
 const { getFuzzyFAQ } = require("../utils/faqEngine");
 const multer = require('multer');
 const fs = require('fs');
+const statusAuth = require("../middlewares/statusAuth");
 const fsPromises = require('fs').promises;
 
 const SOFT_MESSAGES = {
@@ -125,7 +126,7 @@ const toolDefinitions = [
             properties: {
                 title: { type: "STRING" },
                 description: { type: "STRING" },
-                category: { 
+                category: {
                     type: "STRING",
                     enum: allowedCategories
                 },
@@ -154,7 +155,7 @@ async function generateWithRetry(message, history, tools, systemInstruction, att
     }
 }
 
-lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, async (req, res) => {
+lokAiRouter.post('/ai/analyze-image', userAuth, statusAuth, profileAuth, uploadMiddleware, async (req, res) => {
     try {
         if (!req.files || req.files.length === 0) return res.status(400).json({ success: false, message: "No images uploaded" });
 
@@ -198,7 +199,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, profileAuth, uploadMiddleware, a
     } finally { cleanupFiles(req.files); }
 });
 
-lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, res) => {
+lokAiRouter.post("/ai/chat", userAuth, statusAuth, profileAuth, lokAiLimiter, async (req, res) => {
     try {
         const { message, history, lng, lat, city } = req.body;
         const currentUserId = req.userId;
@@ -281,7 +282,7 @@ lokAiRouter.post("/ai/chat", userAuth, profileAuth, lokAiLimiter, async (req, re
     }
 });
 
-lokAiRouter.post('/ai/analyze-audio', userAuth, profileAuth, audioUploadMiddleware, async (req, res) => {
+lokAiRouter.post('/ai/analyze-audio', userAuth, statusAuth, profileAuth, audioUploadMiddleware, async (req, res) => {
     try {
         if (!req.file) return res.status(400).json({ success: false, message: "No audio file uploaded" });
 

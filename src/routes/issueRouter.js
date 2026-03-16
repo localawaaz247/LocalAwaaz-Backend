@@ -4,6 +4,7 @@ const issueRouter = express.Router();
 
 // Middlewares
 const userAuth = require('../middlewares/userAuth');
+const statusAuth = require('../middlewares/statusAuth');
 const profileAuth = require('../middlewares/profileAuth');
 
 // Models
@@ -35,7 +36,7 @@ const s3 = new S3Client({
 });
 
 //GET issues according to City and Pincode
-issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
+issueRouter.get('/issue/area', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { search } = req.query;
         const { userId } = req;
@@ -111,7 +112,7 @@ issueRouter.get('/issue/area', userAuth, profileAuth, async (req, res) => {
 // ---------------------------------------------------------
 // POST: Create Issue
 // ---------------------------------------------------------
-issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
+issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const userId = req.userId;
         checkIssueCreation(req);
@@ -193,7 +194,7 @@ issueRouter.post('/issue', userAuth, profileAuth, async (req, res) => {
 // ---------------------------------------------------------
 // GET: Get issue accoring to issue id
 // ---------------------------------------------------------
-issueRouter.get('/issue/:id', userAuth, async (req, res) => {
+issueRouter.get('/issue/:id', userAuth, statusAuth, async (req, res) => {
     try {
         const { id } = req.params;
         if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -250,7 +251,7 @@ issueRouter.get('/issue/:id', userAuth, async (req, res) => {
 // ---------------------------------------------------------
 // PATCH: Update Issue
 // ---------------------------------------------------------
-issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
+issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -377,7 +378,7 @@ issueRouter.patch('/issue/:id', userAuth, profileAuth, async (req, res) => {
 });
 
 // DELETE: Soft delete an issue (only creator, only when OPEN)
-issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
+issueRouter.delete('/issue/:id', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -448,7 +449,7 @@ issueRouter.delete('/issue/:id', userAuth, profileAuth, async (req, res) => {
 });
 
 // CONFIRM: Confirm an issue if present within some range
-issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, async (req, res) => {
+issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -515,7 +516,7 @@ issueRouter.post('/issue/:id/confirm', userAuth, profileAuth, locationAuth, asyn
 });
 
 // POST endpoint to flag an issue for a specific reason
-issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async (req, res) => {
+issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -592,7 +593,7 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
 
 // GET /issue/:id/share
 // Handles sharing an issue using a manual cooldown-based approach
-// issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
+// issueRouter.put('/issue/:id/share', userAuth, statusAuth, profileAuth, async (req, res) => {
 //     try {
 //         // Extract authenticated user id
 //         const { userId } = req;
@@ -697,7 +698,7 @@ issueRouter.post('/issue/:id/:flag', userAuth, profileAuth, locationAuth, async 
 // PUT /issue/:id/share
 // Handles sharing an issue with TTL-based throttling
 
-issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
+issueRouter.put('/issue/:id/share', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         // Extract authenticated userId (set by auth middleware)
         const { userId } = req;
@@ -761,7 +762,7 @@ issueRouter.put('/issue/:id/share', userAuth, profileAuth, async (req, res) => {
 });
 
 // GET endpoint to fetch the impact score of a specific issue
-issueRouter.get('/issue/:id/impact-score', userAuth, profileAuth, async (req, res) => {
+issueRouter.get('/issue/:id/impact-score', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;        // Extract authenticated user's ID from the middleware
         const { id } = req.params;     // Get the issue ID from the URL parameters

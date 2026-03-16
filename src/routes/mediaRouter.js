@@ -6,6 +6,7 @@ const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
 const TempMedia = require('../models/TempMedia');
+const statusAuth = require('../middlewares/statusAuth');
 
 const mediaRouter = express.Router();
 
@@ -37,7 +38,7 @@ const upload = multer({
 
 const uploadMiddleware = upload.array('issue_media', 3);
 
-mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
+mediaRouter.post("/upload-issues", userAuth, statusAuth, profileAuth, (req, res, next) => {
     uploadMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {
@@ -145,7 +146,7 @@ mediaRouter.post("/upload-issues", userAuth, profileAuth, (req, res, next) => {
 
 const uploadAvatarMiddleware = upload.single('file');
 
-mediaRouter.post("/upload-avatar", userAuth, (req, res, next) => {
+mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
     uploadAvatarMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {

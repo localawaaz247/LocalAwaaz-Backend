@@ -1,6 +1,7 @@
 const express = require("express");
 const User = require("../models/User");
 const userAuth = require("../middlewares/userAuth"); // JWT auth middleware
+const statusAuth = require('../middlewares/statusAuth')
 const userRouter = express.Router();
 const validate = require('validator');
 const Issue = require("../models/Issue");
@@ -20,7 +21,7 @@ const axios = require("axios");
  *
  * Requires authentication.
  */
-userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
+userRouter.patch("/me/profile-complete", userAuth, statusAuth, async (req, res) => {
     try {
         const {
             userName,
@@ -138,7 +139,7 @@ userRouter.patch("/me/profile-complete", userAuth, async (req, res) => {
     }
 });
 
-userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/issues/feed', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { lng, lat, page = 1, limit = 10 } = req.query;
         if (!lng || !lat) {
@@ -243,7 +244,7 @@ userRouter.get('/issues/feed', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/me/profile', userAuth, async (req, res) => {
+userRouter.get('/me/profile', userAuth, statusAuth, async (req, res) => {
     try {
         const { userId } = req;
         const user = await User.findById(userId).select("-password");
@@ -262,7 +263,7 @@ userRouter.get('/me/profile', userAuth, async (req, res) => {
     }
 })
 
-userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
+userRouter.patch('/me/profile', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
 
@@ -370,7 +371,7 @@ userRouter.patch('/me/profile', userAuth, profileAuth, async (req, res) => {
     }
 });
 
-userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/me/issues', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { status, page = 1, limit = 10 } = req.query;
@@ -430,7 +431,7 @@ userRouter.get('/me/issues', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/me/issues/confirmed', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         // 1. Pagination Setup
         const { page = 1, limit = 10 } = req.query;
@@ -539,7 +540,7 @@ userRouter.get('/me/issues/confirmed', userAuth, profileAuth, async (req, res) =
 });
 
 
-userRouter.post('/get-location-from-coords', userAuth, async (req, res) => {
+userRouter.post('/get-location-from-coords', userAuth, statusAuth, async (req, res) => {
     try {
         const { lat, lng } = req.body;
 
@@ -583,7 +584,7 @@ userRouter.post('/get-location-from-coords', userAuth, async (req, res) => {
     }
 });
 
-userRouter.patch('/me/preferences/notification', userAuth, profileAuth, async (req, res) => {
+userRouter.patch('/me/preferences/notification', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { enableNotification } = req.body;
@@ -618,7 +619,7 @@ userRouter.patch('/me/preferences/notification', userAuth, profileAuth, async (r
  * GET /me/notifications
  * Fetches the user's notification history for the dropdown panel
  */
-userRouter.get('/me/notifications', userAuth, async (req, res) => {
+userRouter.get('/me/notifications', userAuth, statusAuth, async (req, res) => {
     try {
         // Basic pagination to keep the payload light
         const { page = 1, limit = 20 } = req.query;
@@ -655,7 +656,7 @@ userRouter.get('/me/notifications', userAuth, async (req, res) => {
  * PATCH /me/notifications/read
  * Marks all of the user's unread notifications as "read"
  */
-userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
+userRouter.patch('/me/notifications/read', userAuth, statusAuth, async (req, res) => {
     try {
         // Find all unread notifications for this specific user and turn them to true
         await Notification.updateMany(
@@ -675,7 +676,7 @@ userRouter.patch('/me/notifications/read', userAuth, async (req, res) => {
 });
 
 // DELETE a specific notification
-userRouter.delete('/me/notifications/:id', userAuth, async (req, res) => {
+userRouter.delete('/me/notifications/:id', userAuth, statusAuth, async (req, res) => {
     try {
         const { id } = req.params;
 
@@ -698,7 +699,7 @@ userRouter.delete('/me/notifications/:id', userAuth, async (req, res) => {
 });
 
 // DELETE all notifications for the user
-userRouter.delete('/me/notifications', userAuth, async (req, res) => {
+userRouter.delete('/me/notifications', userAuth, statusAuth, async (req, res) => {
     try {
         await Notification.deleteMany({ recipient: req.userId });
 
@@ -809,7 +810,7 @@ userRouter.get('/locations', async (req, res) => {
     }
 });
 
-userRouter.post('/save-issue/:id', userAuth, profileAuth, async (req, res) => {
+userRouter.post('/save-issue/:id', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const { id } = req.params;
@@ -840,7 +841,7 @@ userRouter.post('/save-issue/:id', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.get('/saved-issues', userAuth, profileAuth, async (req, res) => {
+userRouter.get('/saved-issues', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const user = await User.findById(userId).populate({
@@ -895,7 +896,7 @@ userRouter.get('/saved-issues', userAuth, profileAuth, async (req, res) => {
     }
 })
 
-userRouter.delete('/remove/saved-issue/:id', userAuth, profileAuth, async (req, res) => {
+userRouter.delete('/remove/saved-issue/:id', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
         const issueId = req.params.id;
@@ -924,7 +925,7 @@ userRouter.delete('/remove/saved-issue/:id', userAuth, profileAuth, async (req, 
 
 })
 
-userRouter.delete('/saved-issues/clear', userAuth, profileAuth, async (req, res) => {
+userRouter.delete('/saved-issues/clear', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
 
