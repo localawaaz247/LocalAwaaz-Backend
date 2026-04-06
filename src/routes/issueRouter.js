@@ -117,7 +117,7 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
         const userId = req.userId;
         checkIssueCreation(req);
 
-        const { title, category, description, location, isAnonymous, media } = req.body;
+        const { title, category, description, location, isAnonymous, media, thumbnails } = req.body;
 
         const missing = [];
         if (!location?.state) missing.push("state");
@@ -177,6 +177,7 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
             priority,
             impactScore: initialImpactScore, // <-- NEW: Injected calculated score
             media: media.map(url => ({ url })),
+            thumbnails: thumbnails || [],
             status: "OPEN",
             statusHistory: [{ status: "OPEN", changedBy: userId, note: "Issue reported" }]
         });
@@ -801,6 +802,15 @@ issueRouter.get('/issue/:id/impact-score', userAuth, statusAuth, profileAuth, as
             success: false,
             message: "Server error in getting impact score"
         });
+    }
+});
+
+issueRouter.get('/issue/global/resolved-count', async (req, res) => {
+    try {
+        const count = await Issue.countDocuments({ status: 'RESOLVED' });
+        res.status(200).json({ success: true, resolvedCount: count });
+    } catch (error) {
+        res.status(500).json({ success: false });
     }
 });
 

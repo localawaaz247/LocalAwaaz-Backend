@@ -27,7 +27,6 @@ const issueModel = new mongoose.Schema({
         default: null,
         uppercase: true,
         index: true
-
     },
     description: {
         type: String,
@@ -95,9 +94,10 @@ const issueModel = new mongoose.Schema({
             uploadedAt: { type: Date, default: Date.now }
         }
     ],
-    // uploadToken: { type: String, index: true, default: null },
-    // mediaProcessing: { type: Boolean, default: false },
-    // mediaFailed: { type: Boolean, default: false },
+    // --- NEW: Added thumbnails array ---
+    thumbnails: [{
+        type: String
+    }],
     priority: {
         type: String,
         enum: ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'],

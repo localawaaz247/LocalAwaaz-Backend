@@ -2,7 +2,17 @@ const express = require('express');
 const multer = require('multer');
 const crypto = require("crypto");
 const fs = require('fs');
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const path = require('path');
+const {
+    S3Client,
+    PutObjectCommand,
+    CreateMultipartUploadCommand,
+    UploadPartCommand,
+    CompleteMultipartUploadCommand,
+    AbortMultipartUploadCommand
+} = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
 const TempMedia = require('../models/TempMedia');
@@ -10,6 +20,7 @@ const statusAuth = require('../middlewares/statusAuth');
 
 const mediaRouter = express.Router();
 
+// --- S3 / CLOUDFLARE R2 CLIENT ---
 const s3 = new S3Client({
     region: "auto",
     endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
@@ -19,14 +30,127 @@ const s3 = new S3Client({
     },
 });
 
-const upload = multer({
-    dest: 'temp_uploads/', // 🟢 Reverted back to your original setup
-    limits: {
-        fileSize: 30 * 1024 * 1024, // Max size per individual file (allows flexibility for the combined limit)
-        files: 3 // Max 3 files
-    },
+const getISTDateString = () => {
+    const date = new Date();
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(date.getTime() + istOffset);
+    return istDate.toISOString().split('T')[0];
+};
+
+// ============================================================================
+// UPPY DIRECT-TO-CLOUD MULTIPART UPLOAD ENDPOINTS (For Issues: max 5 files, 300MB)
+// ============================================================================
+
+// 1. Initiate Multipart Upload
+mediaRouter.post('/multipart/create', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { filename, type, metadata } = req.body;
+        if (!filename) throw new Error("Filename is missing from frontend payload");
+
+        // Smart Naming Convention
+        const safeCategory = (metadata?.category || "Issue").replace(/[^a-zA-Z0-9]/g, '-');
+        const safeCity = (metadata?.location?.city || "Unknown-City").replace(/[^a-zA-Z0-9]/g, '-');
+        const dateStr = getISTDateString();
+
+        const fileExtension = path.extname(filename) || '.mp4';
+        const uniqueString = crypto.randomBytes(3).toString('hex');
+
+        // Example: issues/user123/ROAD-POTHOLES-Mumbai-2026-04-06-a1b2c3.mp4
+        const smartFileName = `${safeCategory}-${safeCity}-${dateStr}-${uniqueString}${fileExtension}`;
+        const key = `issues/${req.userId}/${smartFileName}`;
+
+        const command = new CreateMultipartUploadCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: key,
+            ContentType: type
+        });
+
+        const upload = await s3.send(command);
+        res.status(200).json({ uploadId: upload.UploadId, key: key });
+
+    } catch (error) {
+        console.error("🔥 CRASH IN /multipart/create:", error);
+        res.status(500).json({ error: "Failed to initiate upload." });
+    }
+});
+
+// 2. Sign Individual Chunks
+mediaRouter.post('/multipart/sign', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { uploadId, key, partNumber } = req.body;
+
+        const command = new UploadPartCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: key,
+            UploadId: uploadId,
+            PartNumber: partNumber,
+        });
+
+        // Generate a pre-signed URL valid for 1 hour for this specific chunk
+        const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+        res.status(200).json({ url });
+
+    } catch (error) {
+        console.error("🔥 CRASH IN /multipart/sign:", error);
+        res.status(500).json({ error: "Failed to sign part" });
+    }
+});
+
+// 3. Complete and Stitch Files
+mediaRouter.post('/multipart/complete', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { uploadId, key, parts } = req.body;
+
+        // CRITICAL: Cloudflare R2 requires parts to be strictly sorted numerically
+        const sortedParts = parts.sort((a, b) => a.PartNumber - b.PartNumber);
+
+        const command = new CompleteMultipartUploadCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: key,
+            UploadId: uploadId,
+            MultipartUpload: { Parts: sortedParts }
+        });
+
+        await s3.send(command);
+
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
+        res.status(200).json({ location: publicUrl });
+
+    } catch (error) {
+        console.error("🔥 CRASH IN /multipart/complete:", error);
+        res.status(500).json({ error: "Failed to complete upload" });
+    }
+});
+
+// 4. Abort on Cancellation
+mediaRouter.post('/multipart/abort', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { uploadId, key } = req.body;
+
+        const command = new AbortMultipartUploadCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: key,
+            UploadId: uploadId
+        });
+
+        await s3.send(command);
+        res.status(200).json({ success: true });
+
+    } catch (error) {
+        console.error("🔥 CRASH IN /multipart/abort:", error);
+        res.status(500).json({ error: "Failed to abort" });
+    }
+});
+
+
+// ============================================================================
+// AVATAR UPLOAD (Kept untouched because Multer is fine for small 1-off images)
+// ============================================================================
+
+const uploadAvatar = multer({
+    dest: 'temp_uploads/',
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for avatar
     fileFilter: (req, file, cb) => {
-        // Strict whitelist prevents malicious SVG uploads
         const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
         if (allowedMimes.includes(file.mimetype)) {
             cb(null, true);
@@ -36,115 +160,7 @@ const upload = multer({
     }
 });
 
-const uploadMiddleware = upload.array('issue_media', 3);
-
-mediaRouter.post("/upload-issues", userAuth, statusAuth, profileAuth, (req, res, next) => {
-    uploadMiddleware(req, res, (err) => {
-        if (err instanceof multer.MulterError) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ success: false, message: "One of your files exceeds the 30MB limit." });
-            }
-            if (err.code === 'LIMIT_UNEXPECTED_FILE') {
-                return res.status(400).json({ success: false, message: "You can only upload a maximum of 3 images." });
-            }
-            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
-        } else if (err) {
-            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
-                return res.status(400).json({ success: false, message: "Only image files (JPG, PNG, WEBP, GIF) are allowed." });
-            }
-            return res.status(500).json({ success: false, message: "An unexpected error occurred during upload." });
-        }
-        next();
-    });
-}, async (req, res) => {
-    try {
-        const files = req.files;
-
-        if (!files || files.length === 0) {
-            return res.status(400).json({ success: false, message: "No files uploaded." });
-        }
-
-        // Enforce COMBINED 30MB limit
-        const MAX_TOTAL_SIZE = 30 * 1024 * 1024;
-        const totalSize = files.reduce((acc, file) => acc + file.size, 0);
-
-        if (totalSize > MAX_TOTAL_SIZE) {
-            console.log(`⚠️ Upload rejected. Total size ${totalSize} exceeds 30MB.`);
-            files.forEach(f => {
-                if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-            });
-            return res.status(400).json({
-                success: false,
-                message: "Total combined file size exceeds the 30MB limit. Please compress your images."
-            });
-        }
-
-        const uploadedUrls = [];
-        console.log(`🚀 Starting Direct Upload for ${files.length} images...`);
-
-        for (const file of files) {
-            try {
-                const fileStream = fs.createReadStream(file.path);
-                const uniqueFileName = `${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
-
-                const command = new PutObjectCommand({
-                    Bucket: process.env.R2_BUCKET_NAME,
-                    Key: uniqueFileName,
-                    Body: fileStream,
-                    ContentType: file.mimetype,
-                });
-
-                await s3.send(command);
-
-                const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
-                uploadedUrls.push(publicUrl);
-
-                await TempMedia.create({
-                    url: publicUrl,
-                    r2Key: uniqueFileName
-                });
-
-                console.log(`✅ Uploaded & Tracked: ${uniqueFileName}`);
-
-                // Clean up local temp file immediately after success
-                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-
-            } catch (uploadErr) {
-                console.error(`❌ Failed to upload ${file.originalname} to Cloudflare:`, uploadErr);
-                // Throwing the error here breaks the loop immediately (Fail-Fast)
-                throw new Error("CLOUDFLARE_UPLOAD_FAILED");
-            }
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: "Images uploaded successfully.",
-            media: uploadedUrls
-        });
-
-    } catch (error) {
-        console.error("Upload Process Error:", error);
-
-        // Guarantee ALL remaining local files in temp_uploads/ are cleaned up if the process aborted
-        if (req.files) {
-            req.files.forEach(f => {
-                if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
-            });
-        }
-
-        // Send the user-friendly error to try again
-        if (error.message === "CLOUDFLARE_UPLOAD_FAILED") {
-            return res.status(500).json({
-                success: false,
-                message: "A network issue occurred while saving your images. Please try uploading them one more time."
-            });
-        }
-
-        return res.status(500).json({ success: false, message: "Server error during upload." });
-    }
-});
-
-const uploadAvatarMiddleware = upload.single('file');
+const uploadAvatarMiddleware = uploadAvatar.single('file');
 
 mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
     uploadAvatarMiddleware(req, res, (err) => {
@@ -172,7 +188,6 @@ mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
         console.log(`🚀 Starting Direct Upload for Avatar...`);
 
         const fileStream = fs.createReadStream(file.path);
-        // Prefix with 'avatar-' for easier organization in your R2 bucket
         const uniqueFileName = `avatar-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
 
         const command = new PutObjectCommand({
@@ -187,10 +202,8 @@ mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
         const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
         console.log(`✅ Avatar Uploaded: ${uniqueFileName}`);
 
-        // Clean up local temp file immediately after success
         if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
 
-        // Send back the publicUrl exactly as the frontend expects
         return res.status(200).json({
             success: true,
             message: "Profile picture uploaded successfully.",
@@ -199,12 +212,7 @@ mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
 
     } catch (error) {
         console.error("Avatar Upload Error:", error);
-
-        // Guarantee cleanup if upload fails
-        if (req.file && fs.existsSync(req.file.path)) {
-            fs.unlinkSync(req.file.path);
-        }
-
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         return res.status(500).json({
             success: false,
             message: "A network issue occurred while saving your image."
