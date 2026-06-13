@@ -18,6 +18,7 @@ const startGarbageCollector = require('../utils/garbageCollector');
 const lokAiRouter = require('../routes/lokAiRouter');
 const adminRouter = require('../routes/adminRouter');
 const cron = require('node-cron');
+const visitsRouter = require('../routes/visitsRouter');
 
 const app = express();
 const server = http.createServer(app);
@@ -96,6 +97,7 @@ app.use('/', contactRouter);
 app.use('/', mediaRouter);
 app.use('/', lokAiRouter);
 app.use('/', adminRouter);
+app.use('/', visitsRouter);
 
 // A simple route to keep the server awake
 app.get('/ping', (req, res) => {
