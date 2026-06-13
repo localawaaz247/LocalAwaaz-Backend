@@ -236,7 +236,8 @@ const userSchema = new mongoose.Schema({
         enum: ['ACTIVE', 'SUSPENDED', 'BANNED'],
         default: "ACTIVE",
         index: true
-    }
+    },
+    fcmToken: { type: String, default: null }
 },
     {
         // Automatically adds createdAt & updatedAt

@@ -954,4 +954,19 @@ userRouter.delete('/saved-issues/clear', userAuth, statusAuth, profileAuth, asyn
 })
 
 
+userRouter.post('/user/update-fcm-token', userAuth, async (req, res) => {
+    try {
+        const { token } = req.body;
+        const userId = req.user._id;
+
+        // Save the token to the user's document in MongoDB
+        await User.findByIdAndUpdate(userId, { fcmToken: token });
+
+        res.status(200).json({ success: true, message: "Token updated" });
+    } catch (error) {
+        console.error("Error saving FCM token:", error);
+        res.status(500).json({ success: false, message: "Server error" });
+    }
+});
+
 module.exports = userRouter;
