@@ -1,19 +1,24 @@
 const express = require('express');
 const validateSignUpData = require('../utils/validateLocalSignupData');
-const OtpModel = require('../models/Otp'); 
+const OtpModel = require('../models/Otp');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
-const checkUniqueness = require('../utils/checkUniqueness'); 
+const checkUniqueness = require('../utils/checkUniqueness');
 const { generateAccessToken, generateRefreshToken } = require('../config/tokens');
 require('dotenv').config();
 const passport = require('passport');
-const LoginAttempt = require('../models/LoginAttempt'); 
+const LoginAttempt = require('../models/LoginAttempt');
 const { sendMail } = require('../config/sendOtp');
 const validator = require('validator')
 const Inquiry = require('../models/Inquiry');
 
 const authRouter = express.Router();
+
+const { OAuth2Client } = require('google-auth-library');
+// Note: You will eventually need to add your Android/iOS Client IDs here too, 
+// but we can start with the web client ID for the backend verification.
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 /**
  * USER REGISTRATION
@@ -87,9 +92,9 @@ authRouter.post('/auth/login', async (req, res) => {
         // GATEWAY: BLOCK SUSPENDED/BANNED ACCOUNTS FROM LOGGING IN
         // ---------------------------------------------------------
         if (user.accountStatus === 'BANNED' || user.accountStatus === 'SUSPENDED') {
-            return res.status(403).json({ 
-                success: false, 
-                message: `Account ${user.accountStatus.toLowerCase()}. Contact administrator first.` 
+            return res.status(403).json({
+                success: false,
+                message: `Account ${user.accountStatus.toLowerCase()}. Contact administrator first.`
             });
         }
 
@@ -129,7 +134,7 @@ authRouter.post('/auth/login', async (req, res) => {
         const accessToken = generateAccessToken(user._id, user.role);
         const refreshToken = generateRefreshToken(user._id, user.role);
         const isProduction = process.env.NODE_ENV === "production"
-        
+
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             path: '/refresh_token',
@@ -200,10 +205,10 @@ authRouter.get(
     "/auth/google/callback",
     passport.authenticate("google", {
         failureRedirect: "/login",
-        session: false 
+        session: false
     }),
     (req, res) => {
-        
+
         // ---------------------------------------------------------
         // GATEWAY: BLOCK SUSPENDED/BANNED GOOGLE USERS
         // ---------------------------------------------------------
@@ -215,7 +220,7 @@ authRouter.get(
         const accessToken = generateAccessToken(req.user._id, req.user.role);
         const refreshToken = generateRefreshToken(req.user._id, req.user.role);
         const EXPIRY_LIMIT = 7 * 24 * 60 * 60 * 1000
-        
+
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
             secure: process.env.NODE_ENV === "production",
@@ -252,9 +257,9 @@ authRouter.post('/reset-password/verify-user', async (req, res) => {
         // GATEWAY: BLOCK PASSWORD RESETS FOR BANNED ACCOUNTS
         // ---------------------------------------------------------
         if (user.accountStatus === 'BANNED' || user.accountStatus === 'SUSPENDED') {
-            return res.status(403).json({ 
-                success: false, 
-                message: `Account ${user.accountStatus.toLowerCase()}. Contact administrator first.` 
+            return res.status(403).json({
+                success: false,
+                message: `Account ${user.accountStatus.toLowerCase()}. Contact administrator first.`
             });
         }
 
@@ -264,7 +269,7 @@ authRouter.post('/reset-password/verify-user', async (req, res) => {
         if (otpRecord?.blockUntil && otpRecord.blockUntil > Date.now()) {
             return res.status(429).json({ success: false, message: "Too many attempts. Try again later." });
         }
-        
+
         if (otpRecord?.attempts >= 5) {
             const blockUntil = new Date(Date.now() + 5 * 60 * 1000);
             await OtpModel.updateOne({ email }, { blockUntil });
@@ -319,7 +324,7 @@ authRouter.post('/reset-password/verify-otp', async (req, res) => {
         if (!identifier || !userOtp) {
             return res.status(400).json({ success: false, message: "Missing required fields" })
         }
-        
+
         const purpose = "PASSWORD_RESET"
         const otpRecord = await OtpModel.findOne({
             $or: [{ email: identifier }, { userName: identifier }],
@@ -418,6 +423,101 @@ authRouter.post('/inquiry', async (req, res) => {
 
     } catch (err) {
         return res.status(500).json({ success: false, message: "Server Error: Could not submit your message." });
+    }
+});
+
+/**
+ * NATIVE GOOGLE AUTH (For Mobile App)
+ * Does not use redirects. Expects a POST request with an idToken.
+ */
+authRouter.post('/auth/google/native', async (req, res) => {
+    try {
+        const { idToken } = req.body;
+
+        if (!idToken) {
+            return res.status(400).json({ success: false, message: "ID Token is required" });
+        }
+
+        // 1. Verify the token securely with Google
+        const ticket = await googleClient.verifyIdToken({
+            idToken,
+            audience: process.env.GOOGLE_CLIENT_ID,
+        });
+
+        const payload = ticket.getPayload();
+
+        // 2. Security Check (Mimicking your Passport logic)
+        if (!payload.email_verified) {
+            return res.status(400).json({ success: false, message: "Google account email is not verified." });
+        }
+
+        const email = payload.email;
+        const googleId = payload.sub;
+
+        // 3. User Lookup / Creation
+        let user = await User.findOne({ googleId });
+
+        if (!user) {
+            const emailUser = await User.findOne({ "contact.email": email });
+
+            if (emailUser) {
+                if (emailUser.googleId) {
+                    return res.status(400).json({ success: false, message: "This email is already linked to another Google account" });
+                }
+
+                emailUser.googleId = googleId;
+                if (!emailUser.profilePic) {
+                    emailUser.profilePic = payload.picture;
+                }
+                user = await emailUser.save();
+            } else {
+                user = await User.create({
+                    name: payload.name,
+                    contact: { email },
+                    googleId: googleId,
+                    profilePic: payload.picture,
+                    isEmailVerified: true,
+                    civilScore: 10,
+                    isProfileComplete: false,
+                });
+            }
+        }
+
+        // 4. Gateway: Block Suspended/Banned Users
+        if (user.accountStatus === 'BANNED' || user.accountStatus === 'SUSPENDED') {
+            return res.status(403).json({
+                success: false,
+                message: `Account ${user.accountStatus.toLowerCase()}. Contact administrator first.`
+            });
+        }
+
+        // 5. Generate Tokens & Set Cookies
+        const accessToken = generateAccessToken(user._id, user.role);
+        const refreshToken = generateRefreshToken(user._id, user.role);
+        const EXPIRY_LIMIT = 7 * 24 * 60 * 60 * 1000;
+        const isProduction = process.env.NODE_ENV === "production";
+
+        res.cookie('refreshToken', refreshToken, {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? 'none' : 'lax',
+            maxAge: EXPIRY_LIMIT
+        });
+
+        const userObj = user.toObject();
+        delete userObj.password;
+
+        // Send back a JSON response instead of a redirect
+        return res.status(200).json({
+            success: true,
+            accessToken,
+            user: userObj,
+            isProfileComplete: user.isProfileComplete
+        });
+
+    } catch (err) {
+        console.error("Native Google Auth Error:", err);
+        return res.status(500).json({ success: false, message: "Google Authentication Failed" });
     }
 });
 
