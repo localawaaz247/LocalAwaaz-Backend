@@ -2,6 +2,7 @@
 const { sendMail } = require('../config/sendOtp');
 const Notification = require('../models/Notification'); // We will create this schema next
 const User = require('../models/User');
+const admin = require('../config/firebaseAdmin');
 
 /**
  * Core Engine for Routing Notifications
@@ -21,10 +22,17 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
         });
 
         // 3. Check the User's Master Valve Settings
-        const user = await User.findById(recipientId).select('preferences contact.email');
-        if (!user || user.preferences?.globalNotifications === false) {
-            // Notifications are explicitly muted by this user. Stop here.
-            return;
+        const user = await User.findById(recipientId).select('preferences contact.email fcmToken');
+        if (!user || user.preferences?.globalNotifications === false) return;
+
+        if (user.fcmToken) {
+            const fcmMessage = {
+                notification: { title: "LocalAwaaz Update", body: message },
+                token: user.fcmToken
+            };
+            admin.messaging().send(fcmMessage)
+                .then(() => console.log(`[FCM-SUCCESS] Push sent to: ${user._id}`))
+                .catch(err => console.error(`[FCM-FAILURE] Push failed: ${err.message}`));
         }
 
         // 4. The Online Presence Check via Socket.io
