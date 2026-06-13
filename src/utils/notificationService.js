@@ -1,6 +1,6 @@
 // utils/notificationService.js
 const { sendMail } = require('../config/sendOtp');
-const Notification = require('../models/Notification'); // We will create this schema next
+const Notification = require('../models/Notification');
 const User = require('../models/User');
 const admin = require('../config/firebaseAdmin');
 
@@ -9,10 +9,11 @@ const admin = require('../config/firebaseAdmin');
  */
 const triggerNotification = async ({ recipientId, senderId, issueId, type, message, io }) => {
     try {
-        // 1. Prevent users from notifying themselves (e.g., commenting on their own issue)
+        // 1. Prevent users from notifying themselves
         if (recipientId.toString() === senderId.toString()) return;
 
-        // 2. ALWAYS save to the Database FIRST so they have a history for the Bell Icon
+        // 2. ALWAYS save to the Database FIRST 
+        // This ensures they always have a written record in the in-app notification section
         const newNotification = await Notification.create({
             recipient: recipientId,
             sender: senderId,
@@ -25,31 +26,47 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
         const user = await User.findById(recipientId).select('preferences contact.email fcmToken');
         if (!user || user.preferences?.globalNotifications === false) return;
 
-        if (user.fcmToken) {
-            const fcmMessage = {
-                notification: { title: "LocalAwaaz Update", body: message },
-                token: user.fcmToken
-            };
-            admin.messaging().send(fcmMessage)
-                .then(() => console.log(`[FCM-SUCCESS] Push sent to: ${user._id}`))
-                .catch(err => console.error(`[FCM-FAILURE] Push failed: ${err.message}`));
-        }
-
-        // 4. The Online Presence Check via Socket.io
+        // 4. Check Online Presence FIRST via Socket.io
         let isOnline = false;
         if (io) {
-            // .fetchSockets() looks inside the user's private room to see if they are active
             const userSockets = await io.in(recipientId.toString()).fetchSockets();
             isOnline = userSockets.length > 0;
         }
 
-        // 5. The Routing Logic (Socket vs. Email)
+        // 5. The Routing Logic
         if (isOnline) {
-            // ONLINE: Only push the red badge to the UI. DO NOT send an email.
+            // SCENARIO 1: ONLINE. Only push to the UI. Do NOT send FCM or Email.
             io.to(recipientId.toString()).emit('receive_notification', newNotification);
-            console.log(`[SOCKET] Real-time alert sent to online user: ${recipientId}`);
+            console.log(`[SOCKET] Real-time alert sent to online user: ${recipientId}.`);
+            return; // Stops execution here.
+        }
+
+        // SCENARIO 2: OFFLINE. Try FCM First.
+        let fcmSuccess = false;
+
+        if (user.fcmToken) {
+            try {
+                const fcmMessage = {
+                    notification: { title: "LocalAwaaz Update", body: message },
+                    token: user.fcmToken
+                };
+
+                // We AWAIT the FCM call to guarantee we know if it succeeded or failed
+                await admin.messaging().send(fcmMessage);
+                console.log(`[FCM-SUCCESS] Push sent to offline user: ${user._id}`);
+                fcmSuccess = true; // FCM worked, flip the flag
+
+            } catch (err) {
+                console.error(`[FCM-FAILURE] Push failed: ${err.message}`);
+                fcmSuccess = false; // FCM failed
+            }
         } else {
-            // OFFLINE: Evaluate for Brevo Email
+            console.log(`[FCM-SKIP] No FCM token found for user: ${user._id}`);
+        }
+
+        // SCENARIO 3: FCM FAILED / NO TOKEN. Fallback to Email.
+        // If FCM was successful, this block is completely skipped.
+        if (!fcmSuccess) {
             const highPriorityEmailTypes = [
                 'ISSUE_CONFIRMED',
                 'ISSUE_RESOLVED',
@@ -65,8 +82,6 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
             ];
 
             if (highPriorityEmailTypes.includes(type)) {
-                // TODO: Hook up your Brevo API function here
-                // await sendBrevoEmail(user.email, "New Update on LocalAwaaz", message);
                 const targetEmail = user.contact?.email;
                 if (targetEmail) {
                     await sendMail({
@@ -74,13 +89,13 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
                         purpose: "NOTIFICATION",
                         notificationData: { type, message, issueId }
                     });
-                    console.log(`[EMAIL] Brevo triggered for offline user: ${targetEmail}`);
-                }
-                else {
-                    console.log(`[Email] Brevo triggered for offline user: ${targetEmail}`);
+                    console.log(`[EMAIL-FALLBACK] Brevo triggered for offline user: ${targetEmail}`);
+                } else {
+                    console.log(`[EMAIL-SKIP] Missing email address for offline user: ${user._id}`);
                 }
             }
         }
+
     } catch (error) {
         console.error("Failed to trigger notification in Engine:", error);
     }
