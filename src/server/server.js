@@ -97,7 +97,7 @@ app.use('/', contactRouter);
 app.use('/', mediaRouter);
 app.use('/', lokAiRouter);
 app.use('/', adminRouter);
-app.use('/', visitsRouter);
+app.use('/api/visits', visitsRouter);
 
 // A simple route to keep the server awake
 app.get('/ping', (req, res) => {
