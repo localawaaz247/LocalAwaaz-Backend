@@ -29,7 +29,10 @@ const io = new Server(server, {
         origin: [
             'https://www.localawaaz.in',
             'https://localawaaz.in',
-            'http://localhost:5173'
+            'http://localhost:5173',
+            'http://localhost',      // Added for Capacitor Android
+            'https://localhost',     // Added for Capacitor Android (HTTPS)
+            'capacitor://localhost'  // Added for Capacitor iOS
         ],
         methods: ["GET", "POST"],
         credentials: true // <-- ADDED: This is required for Socket.IO to accept cookies/sessions
@@ -62,7 +65,10 @@ app.use(cors({
     origin: [
         'https://www.localawaaz.in',
         'http://localhost:5173',
-        'https://localawaaz.in'
+        'https://localawaaz.in',
+        'http://localhost',      // Added for Capacitor Android
+        'https://localhost',     // Added for Capacitor Android (HTTPS)
+        'capacitor://localhost'  // Added for Capacitor iOS
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
