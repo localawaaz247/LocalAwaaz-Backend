@@ -33,7 +33,7 @@
     "validator": "^13.15.26"
   },
   "engines": {
-    "node": "20.x"
+    "node": ">=22.0.0"
   },
   "scripts": {
     "dev": "nodemon ./src/server/server.js",
