@@ -50,8 +50,32 @@ const userSchema = new mongoose.Schema({
      */
     role: {
         type: String,
-        enum: ['user', 'admin', 'moderator', 'official'],
+        enum: ['user', 'admin', 'official', 'ngo', 'moderator'],
         default: "user"
+    },
+    /**
+     * ============================
+     * AUTHORITY PROFILE (For NGOs & Officials)
+     * ============================
+     * This object is only populated if role is 'official' or 'ngo'.
+     */
+    authorityProfile: {
+        departmentName: { type: String, trim: true }, // e.g., "PWD", "GreenEarth NGO"
+        expertiseTags: [{ type: String, uppercase: true }], // e.g., ["ROADS", "SANITATION", "ELECTRICAL"]
+
+        // The Triple-Match Routing constraints
+        assignedState: { type: String, trim: true },
+        assignedDistrict: { type: String, trim: true },
+
+        // Verification & Gatekeeper
+        isVerified: { type: Boolean, default: false },
+        idProofUrl: { type: String }, // Link to their ID card/Registration paper
+
+        // Performance Metrics (The Leaderboard Data)
+        csiScore: { type: Number, default: 500 }, // Starting baseline score
+        jobsCompleted: { type: Number, default: 0 },
+        jobsFailed: { type: Number, default: 0 },
+        jobsReleased: { type: Number, default: 0 } // Jobs they abandoned
     },
 
     /**

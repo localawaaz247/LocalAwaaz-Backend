@@ -98,6 +98,18 @@ authRouter.post('/auth/login', async (req, res) => {
             });
         }
 
+        // ---------------------------------------------------------
+        // GATEWAY: BLOCK UNVERIFIED AUTHORITIES (NGO/OFFICIAL)
+        // ---------------------------------------------------------
+        if (['official', 'ngo'].includes(user.role)) {
+            if (!user.authorityProfile || !user.authorityProfile.isVerified) {
+                return res.status(403).json({
+                    success: false,
+                    message: "Your application is still under review by the Admin. Please wait for verification."
+                });
+            }
+        }
+
         // Login Attempt Throttling
         let attempt = await LoginAttempt.findOne({ userId: user._id });
         if (!attempt) {
@@ -518,6 +530,77 @@ authRouter.post('/auth/google/native', async (req, res) => {
     } catch (err) {
         console.error("Native Google Auth Error:", err);
         return res.status(500).json({ success: false, message: "Google Authentication Failed" });
+    }
+});
+
+/**
+ * ============================
+ * AUTHORITY (NGO/OFFICIAL) REGISTRATION
+ * ============================
+ * Creates an unverified 'official' or 'ngo' account. 
+ * Must be verified by SuperAdmin before they can login.
+ */
+authRouter.post('/auth/register-authority', async (req, res) => {
+    try {
+        const {
+            name, email, password, role, // role must be 'official' or 'ngo'
+            departmentName, expertiseTags,
+            assignedState, assignedDistrict, idProofUrl,
+            country, state, city, pinCode
+        } = req.body;
+
+        // 1. Validate Input Basics
+        if (!['official', 'ngo'].includes(role)) {
+            return res.status(400).json({ success: false, message: "Role must be 'official' or 'ngo'" });
+        }
+        if (!departmentName || !assignedDistrict || !assignedState || !idProofUrl) {
+            return res.status(400).json({ success: false, message: "Missing required authority profile fields." });
+        }
+
+        // 2. Check for existing email across the entire platform
+        const existingUser = await User.findOne({ "contact.email": email.toLowerCase() });
+        if (existingUser) {
+            return res.status(400).json({ success: false, message: "Email is already registered." });
+        }
+
+        // 3. Hash Password
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // 4. Generate a unique username for them based on department
+        const baseUserName = departmentName.toLowerCase().replace(/[^a-z0-9]/g, '') + "_" + Math.floor(1000 + Math.random() * 9000);
+
+        // 5. Create the Unverified Authority User
+        const newAuthority = await User.create({
+            name,
+            userName: baseUserName,
+            password: hashedPassword,
+            role: role,
+            isProfileComplete: true,
+            isEmailVerified: true, // Assuming you verify email on frontend or trust it for now
+            contact: {
+                email: email.toLowerCase(),
+                country, state, city, pinCode
+            },
+            authorityProfile: {
+                departmentName,
+                expertiseTags: expertiseTags || [],
+                assignedState,
+                assignedDistrict,
+                idProofUrl,
+                isVerified: false // Admin must change this to true later
+            }
+        });
+
+        // 6. Return Success Response
+        res.status(201).json({
+            success: true,
+            message: "Authority Registration submitted successfully. Please wait for Admin verification.",
+            authorityId: newAuthority._id
+        });
+
+    } catch (err) {
+        console.error("Authority Registration Error:", err);
+        res.status(500).json({ success: false, message: "Server error during registration." });
     }
 });
 

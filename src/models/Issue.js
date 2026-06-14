@@ -54,6 +54,12 @@ const issueModel = new mongoose.Schema({
             type: String,
             trim: true
         },
+        district: {
+            type: String,
+            trim: true,
+            required: [true, 'District is required for authority routing'],
+            index: true
+        },
         //2d sphere indexing
         geoData: {
             type: {
@@ -75,7 +81,7 @@ const issueModel = new mongoose.Schema({
     ],
     status: {
         type: String,
-        enum: ["OPEN", "IN_REVIEW", "RESOLVED", "REJECTED"],
+        enum: ["OPEN", "LOCKED", "RESOLVED", "FAILED", "DISPUTED", "RELEASED"],
         default: "OPEN",
         required: true,
         index: true
@@ -110,6 +116,64 @@ const issueModel = new mongoose.Schema({
     adminRemark: {
         type: String
     },
+    /**
+     * ============================
+     * THE BIDDING MARKETPLACE
+     * ============================
+     */
+    bidding: {
+        // Automatically set to 24 hours after Issue creation
+        windowEndsAt: { type: Date },
+
+        // Array of all bids placed on this issue
+        bids: [{
+            authorityId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            proposedTimeHours: { type: Number, required: true },
+            timestamp: { type: Date, default: Date.now }
+        }],
+
+        // The winner of the bid (who locked it)
+        winningBid: {
+            authorityId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            commitmentTimeHours: { type: Number },
+            acceptedAt: { type: Date }
+        }
+    },
+
+    /**
+     * ============================
+     * THE WORK CYCLE & EXTENSIONS
+     * ============================
+     */
+    workCycle: {
+        // Calculate as: acceptedAt + commitmentTimeHours
+        commitmentDeadline: { type: Date },
+
+        extensionRequests: [{
+            hoursRequested: { type: Number, required: true, max: 24 }, // Max 24h as discussed
+            reason: { type: String, required: true },
+            requestedAt: { type: Date, default: Date.now },
+            status: { type: String, enum: ['PENDING', 'APPROVED'], default: 'APPROVED' } // Auto-approved up to 24h
+        }],
+
+        // If they release/abandon the job
+        releaseApology: { type: String },
+
+        // The ultimate verdict by the citizen
+        finalVerdict: { type: String, enum: ['PENDING', 'CONFIRMED', 'OPPOSED'], default: 'PENDING' }
+    },
+
+    /**
+     * Audit Log (In addition to your statusHistory)
+     * Tracks non-status events like "Bid Placed", "Extension Requested", "Override by Admin"
+     */
+    auditLog: [{
+        action: { type: String, required: true },
+        performedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        timestamp: { type: Date, default: Date.now },
+        details: { type: String } // e.g., "Bid 24 hours", "Extended by 6 hours"
+    }],
+
     flags: [
         {
             flagReason: String,
@@ -131,6 +195,12 @@ issueModel.index({ 'location.geoData': '2dsphere' });
 issueModel.index({ 'location.city': 1, status: 1 });
 issueModel.index({ 'location.pinCode': 1, status: 1 });
 issueModel.index({ 'title': 'text' });
+
+// Find issues that are OPEN and the bidding window has expired (For Auto-Dispute)
+issueModel.index({ status: 1, 'bidding.windowEndsAt': 1 });
+
+// Find issues that are LOCKED and the deadline has passed (For Auto-Fail)
+issueModel.index({ status: 1, 'workCycle.commitmentDeadline': 1 });
 
 const Issue = mongoose.model('Issue', issueModel);
 

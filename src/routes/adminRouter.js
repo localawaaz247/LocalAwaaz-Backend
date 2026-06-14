@@ -8,6 +8,8 @@ const triggerNotification = require('../utils/notificationService');
 const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const Inquiry = require('../models/Inquiry');
+const crypto = require('crypto');
+const bcrypt = require('bcrypt');
 
 // Issue Controlling Routes
 // Get all the issues 
@@ -740,6 +742,85 @@ adminRouter.patch('/admin/inquiry/:id', userAuth, adminAuth, async (req, res) =>
     } catch (err) {
         console.error('Server Error: Cannot update inquiry', err);
         return res.status(500).json({ success: false, message: "Server Error: Cannot update inquiry" });
+    }
+});
+
+// ==========================================
+// AUTHORITY REGISTRATION & GATEKEEPING
+// ==========================================
+
+// Fetch all pending NGO/Official registrations
+adminRouter.get('/admin/pending-authorities', userAuth, adminAuth, async (req, res) => {
+    try {
+        const pendingUsers = await User.find({
+            role: { $in: ['official', 'ngo'] },
+            'authorityProfile.isVerified': false
+        }).select('name userName contact role authorityProfile createdAt');
+
+        return res.status(200).json({
+            success: true,
+            message: "Pending authorities fetched",
+            count: pendingUsers.length,
+            data: pendingUsers
+        });
+    } catch (err) {
+        console.error('Server Error: Cannot fetch pending authorities', err);
+        return res.status(500).json({ success: false, message: "Error fetching pending authorities" });
+    }
+});
+
+// Approve an authority
+adminRouter.patch('/admin/approve-authority/:id', userAuth, adminAuth, async (req, res) => {
+    try {
+        const userId = req.params.id;
+
+        // 1. Auto-Generate a secure 8-character temporary password
+        const tempPassword = crypto.randomBytes(4).toString('hex');
+
+        // 2. Hash the new password before storing it
+        const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+        // 3. Update User: Flip isVerified AND overwrite the dummy password
+        const user = await User.findByIdAndUpdate(
+            userId,
+            {
+                $set: {
+                    'authorityProfile.isVerified': true,
+                    password: hashedPassword
+                }
+            },
+            { new: true }
+        );
+
+        if (!user) return res.status(404).json({ success: false, message: "Authority not found" });
+
+        // 4. Trigger the Welcome Email & In-App Notification with Credentials
+        try {
+            const io = req.app.get('io');
+
+            // Craft the message to include the logical username and the raw temporary password
+            const credentialMessage = `Your authority account has been verified by the Admin. You can now log in and bid on local issues. Temporary Credentials — Username: ${user.userName} | Password: ${tempPassword} (Please update your password from your profile settings after logging in.)`;
+
+            triggerNotification({
+                recipientId: user._id,
+                senderId: req.userId,
+                issueId: null,
+                type: 'AUTHORITY_APPROVED',
+                message: credentialMessage,
+                io: io
+            }).catch(err => console.error("Approval notification error:", err));
+        } catch (notificationError) {
+            console.error("Non-fatal error triggering approval notification:", notificationError);
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Authority approved and credentials dispatched successfully",
+            data: user
+        });
+    } catch (err) {
+        console.error('Server Error: Cannot approve authority', err);
+        return res.status(500).json({ success: false, message: "Error approving authority" });
     }
 });
 

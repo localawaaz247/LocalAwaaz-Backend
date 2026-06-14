@@ -20,6 +20,8 @@ const adminRouter = require('../routes/adminRouter');
 const cron = require('node-cron');
 const visitsRouter = require('../routes/visitsRouter');
 const appRouter = require('../routes/appRouter');
+const authorityRouter = require('../routes/authorityRouter');
+const startAccountabilityCron = require('../../jobs/accountability');
 
 const app = express();
 const server = http.createServer(app);
@@ -60,7 +62,7 @@ io.on('connection', (socket) => {
 // require('../workers/mediaWorker')(io);
 // Start the background cron jobs
 startGarbageCollector();
-
+startAccountabilityCron(io);
 app.set("trust proxy", 1);
 app.use(cors({
     origin: [
@@ -105,6 +107,7 @@ app.use('/', mediaRouter);
 app.use('/', lokAiRouter);
 app.use('/', adminRouter);
 app.use('/', appRouter);
+app.use('/', authorityRouter);
 app.use('/api/community-stats', visitsRouter);
 
 // A simple route to keep the server awake

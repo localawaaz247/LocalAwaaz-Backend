@@ -48,6 +48,16 @@ const generateNotificationEmail = (type, message, issueId) => {
     heading = "Your account has been restored.";
     icon = "🎉";
     badgeText = "Account Active";
+  } else if (type === 'AUTHORITY_APPROVED') {
+    heading = "Your Account is Verified!";
+    icon = "🏛️";
+    badgeText = "Official Access Granted";
+    buttonText = "Login to Dashboard";
+  } else if (type === 'JOB_FAILED') {
+    heading = "Deadline Missed - Penalty Applied";
+    icon = "⏳";
+    badgeText = "System Alert";
+    buttonText = "View Profile";
   }
 
   // 2. Generate the Base URLs

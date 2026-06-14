@@ -220,4 +220,83 @@ mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
     }
 });
 
+// ============================================================================
+// STANDARD MEDIA UPLOAD (For ID Proofs and single documents)
+// ============================================================================
+
+const uploadMedia = multer({
+    dest: 'temp_uploads/',
+    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit for documents
+    fileFilter: (req, file, cb) => {
+        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error("FILE_TYPE_NOT_SUPPORTED"), false);
+        }
+    }
+});
+
+const uploadMediaMiddleware = uploadMedia.single('media'); // Matches formData.append('media', file)
+
+mediaRouter.post("/media/upload", userAuth, statusAuth, (req, res, next) => {
+    uploadMediaMiddleware(req, res, (err) => {
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                return res.status(400).json({ success: false, message: "File exceeds the maximum allowed size." });
+            }
+            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
+        } else if (err) {
+            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
+                return res.status(400).json({ success: false, message: "Only images and PDFs are allowed." });
+            }
+            return res.status(500).json({ success: false, message: "Unexpected error during upload." });
+        }
+        next();
+    });
+}, async (req, res) => {
+    try {
+        const file = req.file;
+
+        if (!file) {
+            return res.status(400).json({ success: false, message: "No file uploaded." });
+        }
+
+        console.log(`🚀 Starting Direct Upload for Document...`);
+
+        const fileStream = fs.createReadStream(file.path);
+        const uniqueFileName = `doc-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+        const command = new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: uniqueFileName,
+            Body: fileStream,
+            ContentType: file.mimetype,
+        });
+
+        await s3.send(command);
+
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
+        console.log(`✅ Document Uploaded: ${uniqueFileName}`);
+
+        // Cleanup local temp file
+        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+
+        // Your frontend handleFileUpload expects res.data.urls or res.data.url
+        return res.status(200).json({
+            success: true,
+            url: publicUrl,
+            urls: [publicUrl]
+        });
+
+    } catch (error) {
+        console.error("Document Upload Error:", error);
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
+        return res.status(500).json({
+            success: false,
+            message: "A network issue occurred while saving your document."
+        });
+    }
+});
+
 module.exports = mediaRouter;
