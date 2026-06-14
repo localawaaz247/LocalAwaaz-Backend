@@ -957,7 +957,7 @@ userRouter.delete('/saved-issues/clear', userAuth, statusAuth, profileAuth, asyn
 userRouter.post('/user/update-fcm-token', userAuth, async (req, res) => {
     try {
         const { token } = req.body;
-        const userId = req.user._id;
+        const { userId } = req;
 
         // Save the token to the user's document in MongoDB
         await User.findByIdAndUpdate(userId, { fcmToken: token });
