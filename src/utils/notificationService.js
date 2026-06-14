@@ -50,7 +50,13 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
             try {
                 const fcmMessage = {
                     notification: { title: "LocalAwaaz Update", body: message },
-                    token: user.fcmToken
+                    token: user.fcmToken,
+                    android: {
+                        notification: {
+                            channelId: 'localawaaz_custom_alerts', // Must match frontend ID
+                            sound: 'ting', // IMPORTANT: No .mp3 extension here!
+                        }
+                    }
                 };
 
                 // We AWAIT the FCM call to guarantee we know if it succeeded or failed
