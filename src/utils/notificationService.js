@@ -22,9 +22,11 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
             message: message
         });
 
-        // 3. Check the User's Master Valve Settings
+        // 3. Fetch User Details
+        // NOTE: We removed the globalNotifications check from here because 
+        // it only applies to Emails, not In-App or FCM pushes.
         const user = await User.findById(recipientId).select('preferences contact.email fcmToken');
-        if (!user || user.preferences?.globalNotifications === false) return;
+        if (!user) return;
 
         // 4. Check Online Presence FIRST via Socket.io
         let isOnline = false;
@@ -65,8 +67,13 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
         }
 
         // SCENARIO 3: FCM FAILED / NO TOKEN. Fallback to Email.
-        // If FCM was successful, this block is completely skipped.
         if (!fcmSuccess) {
+            // Master valve check ONLY for emails
+            if (user.preferences?.globalNotifications === false) {
+                console.log(`[EMAIL-SKIP] Email notifications disabled by user: ${user._id}`);
+                return;
+            }
+
             const highPriorityEmailTypes = [
                 'ISSUE_CONFIRMED',
                 'ISSUE_RESOLVED',
