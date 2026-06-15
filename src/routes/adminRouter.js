@@ -10,6 +10,7 @@ const Notification = require('../models/Notification');
 const Inquiry = require('../models/Inquiry');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
+const ExcelJS = require('exceljs')
 
 // Issue Controlling Routes
 // Get all the issues 
@@ -228,36 +229,79 @@ adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => 
 
 
 // User Controlling Routes
+
 // Get all the users 
 adminRouter.get('/admin/users', userAuth, adminAuth, async (req, res) => {
     try {
-        const { page = 1, limit = 20, search } = req.query;
+        const { page = 1, limit = 20, search, role, state, district } = req.query;
 
-        // Base query: don't fetch admins
-        const query = { role: { $ne: 'admin' } };
+        // 1. Build a master array of strict conditions
+        const andConditions = [];
 
-        // Optional: Allow admin to search users by name or email
-        if (search) {
-            query.$or = [
-                { name: { $regex: search, $options: 'i' } },
-                { 'contact.email': { $regex: search, $options: 'i' } }
-            ];
+        // Rule A: Exclude the currently logged-in admin
+        andConditions.push({ _id: { $ne: req.userId } });
+
+        // Rule B: The Gatekeeper Rule
+        // Only allow standard users/admins OR Officials/NGOs that are APPROVED
+        andConditions.push({
+            $or: [
+                { role: { $nin: ['official', 'ngo'] } },
+                { role: { $in: ['official', 'ngo'] }, 'authorityProfile.verificationStatus': 'APPROVED' }
+            ]
+        });
+
+        // Rule C: Dropdown Role Filter
+        if (role) {
+            andConditions.push({ role: role.toLowerCase() });
         }
+
+        // Rule D: Search Filter
+        if (search) {
+            andConditions.push({
+                $or: [
+                    { name: { $regex: search, $options: 'i' } },
+                    { 'contact.email': { $regex: search, $options: 'i' } },
+                    { userName: { $regex: search, $options: 'i' } }
+                ]
+            });
+        }
+
+        // Rule E: State Filter (Matches either standard user state OR authority assigned state)
+        if (state) {
+            andConditions.push({
+                $or: [
+                    { 'contact.state': { $regex: `^${state}$`, $options: 'i' } },
+                    { 'authorityProfile.assignedState': { $regex: `^${state}$`, $options: 'i' } }
+                ]
+            });
+        }
+
+        // Rule F: District Filter (Matches either standard user city OR authority assigned district)
+        if (district) {
+            andConditions.push({
+                $or: [
+                    { 'contact.city': { $regex: `^${district}$`, $options: 'i' } },
+                    { 'authorityProfile.assignedDistrict': { $regex: `^${district}$`, $options: 'i' } }
+                ]
+            });
+        }
+
+        // 2. Assemble the final query using the master array
+        const finalQuery = { $and: andConditions };
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const [users, total] = await Promise.all([
-            User.find(query)
+            User.find(finalQuery)
                 .select('-password')
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit)),
-            User.countDocuments(query)
+            User.countDocuments(finalQuery)
         ]);
 
         return res.status(200).json({
             success: true,
-            message: "Got users successfully",
             data: {
                 users,
                 pagination: {
@@ -271,54 +315,6 @@ adminRouter.get('/admin/users', userAuth, adminAuth, async (req, res) => {
     } catch (err) {
         console.error('Server Error : Cannot get users', err);
         return res.status(500).json({ success: false, message: "Server Error : Cannot get users" });
-    }
-});
-
-// Update user role (Promote/Demote)
-adminRouter.patch('/admin/user/:id/role', userAuth, adminAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { role } = req.body;
-
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: "Invalid User Id" });
-        }
-
-        // Define allowed roles based on your application logic. 
-        // Update these based on what you actually need in LocalAwaaz.
-        const validRoles = ['user', 'admin', 'moderator', 'official'];
-
-        if (!validRoles.includes(role?.toLowerCase())) {
-            return res.status(400).json({
-                success: false,
-                message: `Invalid role. Allowed roles are: ${validRoles.join(', ')}`
-            });
-        }
-
-        const updatedUser = await User.findByIdAndUpdate(
-            id,
-            { $set: { role: role.toLowerCase() } },
-            { new: true }
-        ).select('-password');
-
-        if (!updatedUser) {
-            return res.status(404).json({
-                success: false,
-                message: "User not found"
-            });
-        }
-
-        return res.status(200).json({
-            success: true,
-            message: `User role updated to ${role}`,
-            data: updatedUser
-        });
-    } catch (err) {
-        console.error('Server Error: Cannot update user role', err);
-        return res.status(500).json({
-            success: false,
-            message: "Server Error: Could not update user role"
-        });
     }
 });
 
@@ -532,34 +528,30 @@ adminRouter.patch('/admin/user/:userId', userAuth, adminAuth, async (req, res) =
 // Fetches high-level stats for the admin dashboard
 adminRouter.get('/admin/analytics/summary', userAuth, adminAuth, async (req, res) => {
     try {
-        // Run all independent queries concurrently for better performance
-        const [totalUsers, totalIssues, statusCounts] = await Promise.all([
-            User.countDocuments(),
+        const [totalUsers, pendingRequests, totalOfficials, totalNGOs, totalIssues, statusCounts] = await Promise.all([
+            User.countDocuments({ role: 'user' }), // Only standard users
+            User.countDocuments({ role: { $in: ['official', 'ngo'] }, 'authorityProfile.verificationStatus': 'PENDING' }),
+            User.countDocuments({ role: 'official', 'authorityProfile.verificationStatus': 'APPROVED' }),
+            User.countDocuments({ role: 'ngo', 'authorityProfile.verificationStatus': 'APPROVED' }),
             Issue.countDocuments(),
-            // Aggregate issues to count how many are OPEN, RESOLVED, etc.
-            Issue.aggregate([
-                { $group: { _id: "$status", count: { $sum: 1 } } }
-            ])
+            Issue.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
         ]);
 
-        // Format the status counts into a cleaner object
-        const issueStats = {
-            OPEN: 0, IN_REVIEW: 0, RESOLVED: 0, REJECTED: 0
-        };
-        statusCounts.forEach(stat => {
-            issueStats[stat._id] = stat.count;
-        });
+        const issueStats = { OPEN: 0, IN_REVIEW: 0, RESOLVED: 0, REJECTED: 0 };
+        statusCounts.forEach(stat => { issueStats[stat._id] = stat.count; });
 
         return res.status(200).json({
             success: true,
             message: "Analytics summary fetched successfully",
             data: {
                 totalUsers,
+                pendingRequests,
+                totalOfficials,
+                totalNGOs,
                 totalIssues,
                 issueStats
             }
         });
-
     } catch (err) {
         console.error('Server Error: Cannot fetch analytics summary', err);
         return res.status(500).json({ success: false, message: "Server Error: Analytics summary failed" });
@@ -821,6 +813,402 @@ adminRouter.patch('/admin/approve-authority/:id', userAuth, adminAuth, async (re
     } catch (err) {
         console.error('Server Error: Cannot approve authority', err);
         return res.status(500).json({ success: false, message: "Error approving authority" });
+    }
+});
+
+adminRouter.get('/admin/authorities', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { status } = req.query; // PENDING, APPROVED, or REJECTED
+
+        const query = { role: { $in: ['official', 'ngo'] } };
+        if (status) {
+            query['authorityProfile.verificationStatus'] = status.toUpperCase();
+        }
+
+        const authorities = await User.find(query)
+            .select('name userName contact role authorityProfile createdAt')
+            .sort({ createdAt: -1 });
+
+        return res.status(200).json({
+            success: true,
+            message: `Fetched ${status || 'all'} authorities`,
+            count: authorities.length,
+            data: authorities
+        });
+    } catch (err) {
+        console.error('Server Error: Cannot fetch authorities', err);
+        return res.status(500).json({ success: false, message: "Error fetching authorities" });
+    }
+});
+
+adminRouter.patch('/admin/authority/:id/status', userAuth, adminAuth, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const { status, rejectionReason } = req.body; // 'PENDING', 'APPROVED', 'REJECTED'
+
+        const validStatuses = ['PENDING', 'APPROVED', 'REJECTED'];
+        if (!validStatuses.includes(status?.toUpperCase())) {
+            return res.status(400).json({ success: false, message: "Invalid status provided" });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ success: false, message: "Authority not found" });
+
+        let updateData = { 'authorityProfile.verificationStatus': status.toUpperCase() };
+        let notificationType = null;
+        let notificationMessage = "";
+
+        // Logic based on the new status
+        if (status.toUpperCase() === 'APPROVED') {
+            // Only generate password if they don't have one or if they are moving from Pending -> Approved for the first time
+            const tempPassword = crypto.randomBytes(4).toString('hex');
+            const hashedPassword = await bcrypt.hash(tempPassword, 10);
+
+            updateData.password = hashedPassword;
+            notificationType = 'AUTHORITY_APPROVED';
+            notificationMessage = `Your authority account has been verified by the Admin. You can now log in and bid on local issues. Temporary Credentials — Username: ${user.userName} | Password: ${tempPassword} (Please update your password from your profile settings after logging in.)`;
+        }
+        else if (status.toUpperCase() === 'REJECTED') {
+            notificationType = 'AUTHORITY_REJECTED';
+            notificationMessage = `Unfortunately, your application to join LocalAwaaz as an Authority has been rejected. Reason: ${rejectionReason || 'Does not meet platform guidelines.'}`;
+        }
+        else if (status.toUpperCase() === 'PENDING') {
+            notificationType = 'AUTHORITY_REVERTED';
+            notificationMessage = `Your authority account status has been reverted to Pending for further administrative review. Your marketplace access is temporarily paused.`;
+        }
+
+        // Execute Update
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: updateData },
+            { new: true }
+        );
+
+        // Trigger Notification
+        if (notificationType) {
+            try {
+                triggerNotification({
+                    recipientId: updatedUser._id,
+                    senderId: req.userId,
+                    issueId: null,
+                    type: notificationType,
+                    message: notificationMessage,
+                    io: req.app.get('io')
+                }).catch(err => console.error("Authority status notification error:", err));
+            } catch (notificationError) {
+                console.error("Non-fatal error triggering authority notification:", notificationError);
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: `Authority status updated to ${status.toUpperCase()}`,
+            data: updatedUser
+        });
+    } catch (err) {
+        console.error('Server Error: Cannot update authority status', err);
+        return res.status(500).json({ success: false, message: "Error updating authority status" });
+    }
+});
+
+
+// ==========================================
+// GOD-MODE ADMINISTRATIVE CONTROLS & EXPORTS
+// ==========================================
+
+// 1. Manual Point Adjustment
+adminRouter.patch('/admin/user/:id/points', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { points, reason } = req.body;
+        const userId = req.params.id;
+
+        if (!reason || typeof points !== 'number') {
+            return res.status(400).json({ success: false, message: "Points (number) and reason are required" });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ success: false, message: "User not found" });
+
+        const isAuthority = ['official', 'ngo'].includes(user.role);
+        const pointField = isAuthority ? 'authorityProfile.csiScore' : 'civilScore';
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $inc: { [pointField]: points } },
+            { new: true }
+        );
+
+        // Notify User
+        triggerNotification({
+            recipientId: user._id,
+            senderId: req.userId,
+            issueId: null,
+            type: 'SYSTEM_BROADCAST',
+            message: `Admin Adjustment: Your ${isAuthority ? 'CSI' : 'Civil'} Score has been modified by ${points > 0 ? '+' : ''}${points} points. Reason: ${reason}`,
+            io: req.app.get('io')
+        }).catch(err => console.log(err));
+
+        return res.status(200).json({ success: true, message: "Points adjusted successfully", data: updatedUser });
+    } catch (err) {
+        console.error("Error adjusting points:", err);
+        return res.status(500).json({ success: false, message: "Server error adjusting points" });
+    }
+});
+
+// 2. Full Profile Override (Edit anything)
+adminRouter.patch('/admin/user/:id/edit', userAuth, adminAuth, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const updates = req.body;
+
+        // Handle password change explicitly if provided
+        if (updates.password && updates.password.trim() !== '') {
+            updates.password = await bcrypt.hash(updates.password, 10);
+        } else {
+            delete updates.password; // Don't accidentally overwrite with empty string
+        }
+
+        // Structure nested updates properly for Mongoose
+        const flattenedUpdates = {};
+        for (const key in updates) {
+            if (key === 'email' || key === 'city' || key === 'state') {
+                flattenedUpdates[`contact.${key}`] = updates[key];
+            } else if (key === 'departmentName' || key === 'assignedDistrict' || key === 'assignedState') {
+                flattenedUpdates[`authorityProfile.${key}`] = updates[key];
+            } else {
+                flattenedUpdates[key] = updates[key];
+            }
+        }
+
+        const updatedUser = await User.findByIdAndUpdate(
+            userId,
+            { $set: flattenedUpdates },
+            { new: true }
+        ).select('-password');
+
+        return res.status(200).json({ success: true, message: "Profile heavily updated", data: updatedUser });
+    } catch (err) {
+        console.error("Error overriding profile:", err);
+        return res.status(500).json({ success: false, message: "Server error overriding profile" });
+    }
+});
+
+// 3. Fetch OPEN issues for a specific district (For Force Assign dropdown)
+adminRouter.get('/admin/issues/open/:district', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { district } = req.params;
+        const issues = await Issue.find({
+            status: 'OPEN',
+            'location.city': { $regex: `^${district}$`, $options: 'i' },
+            isDeleted: false
+        }).select('title category createdAt location');
+
+        return res.status(200).json({ success: true, data: issues });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Failed to fetch district issues" });
+    }
+});
+
+// 4. Force Assign Issue (Bypass bidding)
+adminRouter.patch('/admin/issue/:id/force-assign', userAuth, adminAuth, async (req, res) => {
+    try {
+        const issueId = req.params.id;
+        const { authorityId, reason } = req.body;
+
+        const updateData = {
+            status: 'IN_REVIEW',
+            'bidding.winningBid': {
+                authorityId: authorityId,
+                proposedTimeHours: 24, // Default forced timeframe
+                acceptedAt: Date.now()
+            },
+            'workCycle.commitmentDeadline': new Date(Date.now() + 24 * 60 * 60 * 1000)
+        };
+
+        const pushData = {
+            auditLog: { action: 'FORCE_ASSIGNED', performedBy: req.userId, details: reason },
+            statusHistory: { status: 'IN_REVIEW', changedBy: req.userId, remark: `Force Assigned: ${reason}` }
+        };
+
+        const issue = await Issue.findByIdAndUpdate(
+            issueId,
+            { $set: updateData, $push: pushData },
+            { new: true }
+        );
+
+        // Notify the assigned authority
+        triggerNotification({
+            recipientId: authorityId, senderId: req.userId, issueId: issue._id, type: 'SYSTEM_BROADCAST',
+            message: `URGENT: You have been forcibly assigned to issue "${issue.title}" by the Admin. Reason: ${reason}`,
+            io: req.app.get('io')
+        }).catch(e => console.log(e));
+
+        return res.status(200).json({ success: true, message: "Issue forcefully assigned" });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Failed to force assign" });
+    }
+});
+
+// 5. Force Unassign Issue (Kick authority off job)
+adminRouter.patch('/admin/issue/:id/force-unassign', userAuth, adminAuth, async (req, res) => {
+    try {
+        const issueId = req.params.id;
+        const { reason, penaltyPoints } = req.body;
+
+        const issue = await Issue.findById(issueId);
+        if (!issue || !issue.bidding?.winningBid?.authorityId) return res.status(400).json({ success: false, message: "Issue is not currently assigned" });
+
+        const authorityId = issue.bidding.winningBid.authorityId;
+
+        // Reset issue to open
+        await Issue.findByIdAndUpdate(issueId, {
+            $set: { status: 'OPEN', 'bidding.winningBid': null, 'workCycle.commitmentDeadline': null },
+            $push: {
+                auditLog: { action: 'FORCE_UNASSIGNED', performedBy: req.userId, details: reason },
+                statusHistory: { status: 'OPEN', changedBy: req.userId, remark: `Unassigned by Admin: ${reason}` }
+            }
+        });
+
+        // Apply Penalty and Notify
+        if (penaltyPoints && penaltyPoints > 0) {
+            await User.findByIdAndUpdate(authorityId, {
+                $inc: { 'authorityProfile.csiScore': -Math.abs(penaltyPoints), 'authorityProfile.jobsFailed': 1 }
+            });
+        }
+
+        triggerNotification({
+            recipientId: authorityId, senderId: req.userId, issueId: issue._id, type: 'SYSTEM_BROADCAST',
+            message: `Admin has forcefully removed you from the issue "${issue.title}". Penalty: -${penaltyPoints || 0} CSI. Reason: ${reason}`,
+            io: req.app.get('io')
+        }).catch(e => console.log(e));
+
+        return res.status(200).json({ success: true, message: "Authority stripped from issue" });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Failed to force unassign" });
+    }
+});
+
+// 6. Global Excel Export (All filtered users)
+adminRouter.get('/admin/export/users', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { search, role, state, district } = req.query;
+
+        // Build exact same filter as GET /users
+        const andConditions = [{ _id: { $ne: req.userId } }];
+        andConditions.push({
+            $or: [
+                { role: { $nin: ['official', 'ngo'] } },
+                { role: { $in: ['official', 'ngo'] }, 'authorityProfile.verificationStatus': 'APPROVED' }
+            ]
+        });
+        if (role) andConditions.push({ role: role.toLowerCase() });
+        if (search) andConditions.push({ $or: [{ name: { $regex: search, $options: 'i' } }, { 'contact.email': { $regex: search, $options: 'i' } }] });
+        if (state) andConditions.push({ $or: [{ 'contact.state': { $regex: `^${state}$`, $options: 'i' } }, { 'authorityProfile.assignedState': { $regex: `^${state}$`, $options: 'i' } }] });
+        if (district) andConditions.push({ $or: [{ 'contact.city': { $regex: `^${district}$`, $options: 'i' } }, { 'authorityProfile.assignedDistrict': { $regex: `^${district}$`, $options: 'i' } }] });
+
+        const users = await User.find({ $and: andConditions }).sort({ createdAt: -1 });
+
+        // Initialize Excel Workbook
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Users Export');
+
+        worksheet.columns = [
+            { header: 'ID', key: '_id', width: 25 },
+            { header: 'Name', key: 'name', width: 25 },
+            { header: 'Email', key: 'email', width: 30 },
+            { header: 'Role', key: 'role', width: 15 },
+            { header: 'Status', key: 'status', width: 15 },
+            { header: 'City/District', key: 'location', width: 20 },
+            { header: 'Joined Date', key: 'joined', width: 20 },
+            { header: 'Last Login', key: 'lastLogin', width: 20 },
+            { header: 'Civil Score', key: 'civilScore', width: 15 },
+            { header: 'CSI Score', key: 'csiScore', width: 15 }
+        ];
+
+        users.forEach(u => {
+            worksheet.addRow({
+                _id: u._id.toString(),
+                name: u.name,
+                email: u.contact?.email || 'N/A',
+                role: u.role.toUpperCase(),
+                status: u.accountStatus || 'ACTIVE',
+                location: u.authorityProfile?.assignedDistrict || u.contact?.city || 'N/A',
+                joined: new Date(u.createdAt).toLocaleString(),
+                lastLogin: u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : 'N/A',
+                civilScore: u.civilScore || 0,
+                csiScore: u.authorityProfile?.csiScore || 0
+            });
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=LocalAwaaz_Users.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error generating Excel file');
+    }
+});
+
+// 7. Individual Forensic Excel Export (Multi-Tabbed)
+adminRouter.get('/admin/export/user/:id', userAuth, adminAuth, async (req, res) => {
+    try {
+        const userId = req.params.id;
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).send('User not found');
+
+        const workbook = new ExcelJS.Workbook();
+
+        // Tab 1: Profile Info
+        const profileSheet = workbook.addWorksheet('Profile Summary');
+        profileSheet.addRow(['Field', 'Data']);
+        profileSheet.addRow(['Name', user.name]);
+        profileSheet.addRow(['Role', user.role.toUpperCase()]);
+        profileSheet.addRow(['Email', user.contact?.email]);
+        profileSheet.addRow(['Joined', new Date(user.createdAt).toLocaleString()]);
+        profileSheet.addRow(['Last Login', user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleString() : 'N/A']);
+        if (['official', 'ngo'].includes(user.role)) {
+            profileSheet.addRow(['CSI Score', user.authorityProfile?.csiScore]);
+            profileSheet.addRow(['Jobs Completed', user.authorityProfile?.jobsCompleted]);
+            profileSheet.addRow(['Jobs Failed', user.authorityProfile?.jobsFailed]);
+            profileSheet.addRow(['Jobs Released', user.authorityProfile?.jobsReleased]);
+        }
+
+        // Tab 2: Reported Issues
+        const reportedIssues = await Issue.find({ reportedBy: userId });
+        const repSheet = workbook.addWorksheet('Reported Issues');
+        repSheet.columns = [{ header: 'Title', key: 'title', width: 30 }, { header: 'Status', key: 'status', width: 15 }, { header: 'Date', key: 'date', width: 20 }];
+        reportedIssues.forEach(i => repSheet.addRow({ title: i.title, status: i.status, date: new Date(i.createdAt).toLocaleString() }));
+
+        // Tab 3: Authority Jobs (If Official/NGO)
+        if (['official', 'ngo'].includes(user.role)) {
+            const assignedJobs = await Issue.find({ 'bidding.winningBid.authorityId': userId });
+            const jobSheet = workbook.addWorksheet('Assigned Jobs History');
+            jobSheet.columns = [
+                { header: 'Issue Title', key: 'title', width: 30 },
+                { header: 'Current Status', key: 'status', width: 15 },
+                { header: 'Bid Won At', key: 'wonAt', width: 20 },
+                { header: 'Proposed Time (Hrs)', key: 'time', width: 15 }
+            ];
+            assignedJobs.forEach(i => {
+                jobSheet.addRow({
+                    title: i.title,
+                    status: i.status,
+                    wonAt: i.bidding?.winningBid?.acceptedAt ? new Date(i.bidding.winningBid.acceptedAt).toLocaleString() : 'N/A',
+                    time: i.bidding?.winningBid?.proposedTimeHours || 'N/A'
+                });
+            });
+        }
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename=Audit_${user.name.replace(/\s+/g, '_')}.xlsx`);
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error(err);
+        res.status(500).send('Error generating Excel file');
     }
 });
 

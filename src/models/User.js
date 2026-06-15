@@ -68,7 +68,11 @@ const userSchema = new mongoose.Schema({
         assignedDistrict: { type: String, trim: true },
 
         // Verification & Gatekeeper
-        isVerified: { type: Boolean, default: false },
+        verificationStatus: {
+            type: String,
+            enum: ['PENDING', 'APPROVED', 'REJECTED'],
+            default: 'PENDING'
+        },
         idProofUrl: { type: String }, // Link to their ID card/Registration paper
 
         // Performance Metrics (The Leaderboard Data)
@@ -261,7 +265,8 @@ const userSchema = new mongoose.Schema({
         default: "ACTIVE",
         index: true
     },
-    fcmToken: { type: String, default: null }
+    fcmToken: { type: String, default: null },
+    lastLoginAt: { type: Date, default: Date.now },
 },
     {
         // Automatically adds createdAt & updatedAt
