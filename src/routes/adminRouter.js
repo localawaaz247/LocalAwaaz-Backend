@@ -16,13 +16,44 @@ const ExcelJS = require('exceljs')
 // Get all the issues 
 adminRouter.get('/admin/issues', userAuth, adminAuth, async (req, res) => {
     try {
-        const { status, state, city, pinCode, page = 1, limit = 20 } = req.query;
+        const { status, state, city, pinCode, reporterRole, search, page = 1, limit = 20 } = req.query;
 
         const query = {};
+
+        // 1. Status Filter
         if (status && typeof status === 'string') query.status = status.toUpperCase();
-        if (state) query['location.state'] = { $regex: state, $options: 'i' };
-        if (city) query['location.city'] = { $regex: city, $options: 'i' };
+
+        // 2. Geographic Filters (Strict regex for exact matches from cscApi)
+        if (state) query['location.state'] = { $regex: `^${state}$`, $options: 'i' };
+        if (city) query['location.city'] = { $regex: `^${city}$`, $options: 'i' };
         if (pinCode) query['location.pinCode'] = pinCode;
+
+        // 3. Reporter Role Filter (Two-step query to avoid complex aggregation)
+        if (reporterRole) {
+            let mappedRole = reporterRole.toLowerCase();
+            // Map the frontend 'citizen' label to the database 'user' enum
+            if (mappedRole === 'citizen') mappedRole = 'user';
+
+            const usersWithRole = await User.find({ role: mappedRole }).select('_id');
+            const userIds = usersWithRole.map(u => u._id);
+            query.reportedBy = { $in: userIds };
+        }
+
+        // 4. Global Search (Title, Pincode, or exact Issue ID)
+        if (search) {
+            const searchConditions = [
+                { title: { $regex: search, $options: 'i' } },
+                { 'location.pinCode': { $regex: search, $options: 'i' } }
+            ];
+
+            // If the search string is a valid MongoDB ObjectId, allow exact ID matching
+            if (mongoose.Types.ObjectId.isValid(search.trim())) {
+                searchConditions.push({ _id: search.trim() });
+            }
+
+            // Safely merge with existing query logic
+            query.$or = searchConditions;
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
@@ -31,7 +62,10 @@ adminRouter.get('/admin/issues', userAuth, adminAuth, async (req, res) => {
                 .sort({ createdAt: -1 })
                 .skip(skip)
                 .limit(parseInt(limit))
-                .populate('reportedBy', 'name userName email civilScore'),
+                // 1. Populate the original reporter
+                .populate('reportedBy', 'name userName email civilScore role')
+                // 2. THIS IS NEW: Populate the winning authority so we can display their name in the UI!
+                .populate('bidding.winningBid.authorityId', 'name userName role authorityProfile'),
             Issue.countDocuments(query)
         ]);
 
@@ -128,20 +162,40 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
                 if (newStatus === 'RESOLVED') notificationType = 'ISSUE_RESOLVED';
                 if (newStatus === 'IN_REVIEW') notificationType = 'ISSUE_IN_REVIEW';
                 if (newStatus === 'REJECTED') notificationType = 'ISSUE_REJECTED';
+                if (newStatus === 'LOCKED') notificationType = 'ISSUE_LOCKED';
 
-                // We only trigger if it maps to an active notification type
                 if (notificationType) {
-                    // Note: No 'await' here. We let the notification run in the background.
-                    triggerNotification({
-                        recipientId: updatedIssue.reportedBy,
-                        senderId: userId,
-                        issueId: updatedIssue._id,
-                        type: notificationType,
-                        message: officialRemark
-                            ? `An admin updated your issue to ${newStatus}: "${officialRemark}"`
-                            : `The status of your issue has been updated to ${newStatus}.`,
-                        io: io
-                    }).catch(err => console.error("Background notification error:", err));
+                    // Gather all unique users involved to prevent duplicate pings
+                    const recipients = new Set();
+
+                    // A. Add original reporter
+                    if (updatedIssue.reportedBy) recipients.add(updatedIssue.reportedBy.toString());
+
+                    // B. Add all citizens who confirmed it
+                    if (updatedIssue.confirmations && updatedIssue.confirmations.length > 0) {
+                        updatedIssue.confirmations.forEach(c => recipients.add(c.user.toString()));
+                    }
+
+                    // C. Add all officials/NGOs who bid on it
+                    if (updatedIssue.bidding && updatedIssue.bidding.bids && updatedIssue.bidding.bids.length > 0) {
+                        updatedIssue.bidding.bids.forEach(b => recipients.add(b.authorityId.toString()));
+                    }
+
+                    const message = officialRemark
+                        ? `Admin Update (${newStatus}): "${officialRemark}" on an issue you interact with.`
+                        : `The status of an issue you interact with has been updated to ${newStatus}.`;
+
+                    // Fire to everyone!
+                    Array.from(recipients).forEach(targetUserId => {
+                        triggerNotification({
+                            recipientId: targetUserId,
+                            senderId: userId,
+                            issueId: updatedIssue._id,
+                            type: notificationType,
+                            message: message,
+                            io: io
+                        }).catch(err => console.error("Background notification error:", err));
+                    });
                 }
             } catch (notificationError) {
                 console.error("Non-fatal error checking admin notification triggers:", notificationError);
@@ -325,38 +379,37 @@ adminRouter.get('/admin/user/:id', userAuth, adminAuth, async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid User Id" });
         }
+
         const user = await User.findById(id).select("-password");
         if (!user) {
-            return res.status(400).json({ success: false, message: "User not found" });
+            return res.status(404).json({ success: false, message: "User not found" });
         }
 
-        //Fetch all the issues
-        const userIssues = await Issue.find({ reportedBy: id })
-            .sort({ createdAt: -1 })
-            .select('title category status location.city location.pinCode createdAt');
+        // Fetch detailed categorized history for the frontend tabs
+        const history = {};
+        history.REPORTED = await Issue.find({ reportedBy: id, isDeleted: false }).select('title location status createdAt');
+        history.CONFIRMED = await Issue.find({ 'confirmations.user': id, isDeleted: false }).select('title location status createdAt');
+        history.FLAGGED = await Issue.find({ 'flags.flaggedBy': id, isDeleted: false }).select('title location status createdAt');
 
-        return res.status(200).json(
-            {
-                success: true,
-                message: "User details fetched successfully",
-                data: {
-                    user,
-                    recentIssues: userIssues,
-                    totalIssuesReported: userIssues.length
-                }
-            }
-        )
+        if (['official', 'ngo'].includes(user.role)) {
+            // If they are an authority, fetch their professional metrics
+            history.ASSIGNED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: { $in: ['LOCKED', 'IN_REVIEW'] }, isDeleted: false }).select('title location status createdAt');
+            history.COMPLETED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: 'RESOLVED', isDeleted: false }).select('title location status createdAt');
+            history.BIDS = await Issue.find({ 'bidding.bids.authorityId': id, isDeleted: false }).select('title location status createdAt');
+            history.RELEASED = await Issue.find({ 'auditLog': { $elemMatch: { action: 'JOB_RELEASED', performedBy: id } }, isDeleted: false }).select('title location status createdAt');
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "User details and history fetched successfully",
+            data: { user, history } // Send back the grouped history object
+        });
+
+    } catch (err) {
+        console.error("Server Error in getting user profile for admin", err);
+        return res.status(500).json({ success: false, message: "Server Error in getting profile of user for admin" });
     }
-    catch (err) {
-        console.log("Server Error in getting user profile for admin", err);
-        return res.status(500).json(
-            {
-                success: false,
-                message: "Server Error in getting profile of user for admin"
-            }
-        )
-    }
-})
+});
 
 // Update user account status (Suspend, Ban, Reactivate)
 adminRouter.patch('/admin/user/:id/status', userAuth, adminAuth, async (req, res) => {
@@ -993,19 +1046,18 @@ adminRouter.patch('/admin/user/:id/edit', userAuth, adminAuth, async (req, res) 
     }
 });
 
-// 3. Fetch OPEN issues for a specific district (For Force Assign dropdown)
-adminRouter.get('/admin/issues/open/:district', userAuth, adminAuth, async (req, res) => {
+// 3. Fetch OPEN issues for a specific district     (For Force Assign dropdown)
+adminRouter.get('/admin/issues/assignable', userAuth, adminAuth, async (req, res) => {
     try {
-        const { district } = req.params;
+        // Find ANY issue globally that is NOT resolved or rejected.
         const issues = await Issue.find({
-            status: 'OPEN',
-            'location.city': { $regex: `^${district}$`, $options: 'i' },
+            status: { $nin: ['RESOLVED', 'REJECTED'] },
             isDeleted: false
-        }).select('title category createdAt location');
+        }).select('title category createdAt location status');
 
         return res.status(200).json({ success: true, data: issues });
     } catch (err) {
-        return res.status(500).json({ success: false, message: "Failed to fetch district issues" });
+        return res.status(500).json({ success: false, message: "Failed to fetch assignable issues" });
     }
 });
 
@@ -1013,21 +1065,27 @@ adminRouter.get('/admin/issues/open/:district', userAuth, adminAuth, async (req,
 adminRouter.patch('/admin/issue/:id/force-assign', userAuth, adminAuth, async (req, res) => {
     try {
         const issueId = req.params.id;
-        const { authorityId, reason } = req.body;
+        const { authorityId, commitmentTimeHours } = req.body;
+
+        if (!commitmentTimeHours || isNaN(commitmentTimeHours) || commitmentTimeHours <= 0) {
+            return res.status(400).json({ success: false, message: "Valid commitment hours are required" });
+        }
+
+        const hours = Number(commitmentTimeHours);
 
         const updateData = {
-            status: 'IN_REVIEW',
+            status: 'LOCKED', // Instantly lock it from the marketplace
             'bidding.winningBid': {
                 authorityId: authorityId,
-                proposedTimeHours: 24, // Default forced timeframe
+                commitmentTimeHours: hours,
                 acceptedAt: Date.now()
             },
-            'workCycle.commitmentDeadline': new Date(Date.now() + 24 * 60 * 60 * 1000)
+            'workCycle.commitmentDeadline': new Date(Date.now() + (hours * 60 * 60 * 1000))
         };
 
         const pushData = {
-            auditLog: { action: 'FORCE_ASSIGNED', performedBy: req.userId, details: reason },
-            statusHistory: { status: 'IN_REVIEW', changedBy: req.userId, remark: `Force Assigned: ${reason}` }
+            auditLog: { action: 'FORCE_ASSIGNED', performedBy: req.userId, details: `Admin force assigned with a ${hours} hour deadline.` },
+            statusHistory: { status: 'LOCKED', changedBy: req.userId, remark: `Force Assigned by Admin. Time allotted: ${hours} hours.` }
         };
 
         const issue = await Issue.findByIdAndUpdate(
@@ -1037,13 +1095,17 @@ adminRouter.patch('/admin/issue/:id/force-assign', userAuth, adminAuth, async (r
         );
 
         // Notify the assigned authority
+        const io = req.app.get('io');
         triggerNotification({
-            recipientId: authorityId, senderId: req.userId, issueId: issue._id, type: 'SYSTEM_BROADCAST',
-            message: `URGENT: You have been forcibly assigned to issue "${issue.title}" by the Admin. Reason: ${reason}`,
-            io: req.app.get('io')
+            recipientId: authorityId,
+            senderId: req.userId,
+            issueId: issue._id,
+            type: 'SYSTEM_BROADCAST',
+            message: `URGENT: You have been forcefully assigned to issue "${issue.title}" by the Admin. You have ${hours} hours to resolve it.`,
+            io: io
         }).catch(e => console.log(e));
 
-        return res.status(200).json({ success: true, message: "Issue forcefully assigned" });
+        return res.status(200).json({ success: true, message: "Issue forcefully assigned and locked" });
     } catch (err) {
         return res.status(500).json({ success: false, message: "Failed to force assign" });
     }
@@ -1209,6 +1271,129 @@ adminRouter.get('/admin/export/user/:id', userAuth, adminAuth, async (req, res) 
     } catch (err) {
         console.error(err);
         res.status(500).send('Error generating Excel file');
+    }
+});
+
+adminRouter.get('/admin/export/issues', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { status, state, city, pinCode, reporterRole, search } = req.query;
+        const query = {};
+
+        // 1. Status Filter
+        if (status && typeof status === 'string') query.status = status.toUpperCase();
+
+        // 2. Geographic Filters
+        if (state) query['location.state'] = { $regex: `^${state}$`, $options: 'i' };
+        if (city) query['location.city'] = { $regex: `^${city}$`, $options: 'i' };
+        if (pinCode) query['location.pinCode'] = pinCode;
+
+        // 3. Reporter Role Filter
+        if (reporterRole) {
+            let mappedRole = reporterRole.toLowerCase();
+            if (mappedRole === 'citizen') mappedRole = 'user';
+            const usersWithRole = await User.find({ role: mappedRole }).select('_id');
+            query.reportedBy = { $in: usersWithRole.map(u => u._id) };
+        }
+
+        // 4. Global Search
+        if (search) {
+            const searchConditions = [
+                { title: { $regex: search, $options: 'i' } },
+                { 'location.pinCode': { $regex: search, $options: 'i' } }
+            ];
+            if (mongoose.Types.ObjectId.isValid(search.trim())) {
+                searchConditions.push({ _id: search.trim() });
+            }
+            query.$or = searchConditions;
+        }
+
+        // Fetch all matching issues (No pagination limit for exports)
+        const issues = await Issue.find(query)
+            .sort({ createdAt: -1 })
+            .populate('reportedBy', 'name email role');
+
+        // Initialize Excel Workbook
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Issues Export');
+
+        worksheet.columns = [
+            { header: 'Issue ID', key: '_id', width: 25 },
+            { header: 'Title', key: 'title', width: 35 },
+            { header: 'Category', key: 'category', width: 20 },
+            { header: 'Priority', key: 'priority', width: 15 },
+            { header: 'Status', key: 'status', width: 15 },
+            { header: 'City', key: 'city', width: 20 },
+            { header: 'State', key: 'state', width: 20 },
+            { header: 'Reported By', key: 'reporterName', width: 25 },
+            { header: 'Reporter Role', key: 'reporterRole', width: 15 },
+            { header: 'Created At', key: 'createdAt', width: 20 }
+        ];
+
+        issues.forEach(i => {
+            const reporterName = i.isAnonymous ? 'Anonymous' : (i.reportedBy?.name || 'Unknown');
+            const role = i.isAnonymous ? 'N/A' : (i.reportedBy?.role || 'Citizen').toUpperCase();
+
+            worksheet.addRow({
+                _id: i._id.toString(),
+                title: i.title,
+                category: i.category || 'N/A',
+                priority: i.priority || 'LOW',
+                status: i.status,
+                city: i.location?.city || 'N/A',
+                state: i.location?.state || 'N/A',
+                reporterName: reporterName,
+                reporterRole: role,
+                createdAt: new Date(i.createdAt).toLocaleString()
+            });
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=LocalAwaaz_Issues.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+
+    } catch (err) {
+        console.error("Export issues error:", err);
+        res.status(500).send('Error generating Excel file');
+    }
+});
+
+// Delete an issue (Nuclear Delete)
+adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue id" });
+        }
+
+        const deletedIssue = await Issue.findByIdAndDelete(id);
+
+        if (!deletedIssue) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        // Scrub from all users' saved lists
+        await User.updateMany(
+            { savedIssues: id },
+            { $pull: { savedIssues: id } }
+        );
+
+        // Scrub all ghost notifications tied to this deleted issue
+        await Notification.deleteMany({ issue: id });
+
+        return res.status(200).json({
+            success: true,
+            message: "Issue and related data successfully wiped"
+        });
+
+    } catch (err) {
+        console.error('Server Error: Cannot delete the issue', err);
+        return res.status(500).json({
+            success: false,
+            message: "Server Error: Cannot delete the issue"
+        });
     }
 });
 
