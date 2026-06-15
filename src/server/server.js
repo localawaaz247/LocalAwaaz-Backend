@@ -73,7 +73,7 @@ app.use(cors({
         'http://localhost',      // Added for Capacitor Android
         'https://localhost',     // Added for Capacitor Android (HTTPS)
         'capacitor://localhost',  // Added for Capacitor iOS
-        'https://localawaaz-frontend-authority.pages.dev/'
+        'https://localawaaz-frontend-authority.pages.dev'
     ],
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
