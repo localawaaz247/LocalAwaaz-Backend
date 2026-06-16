@@ -81,7 +81,7 @@ const issueModel = new mongoose.Schema({
     ],
     status: {
         type: String,
-        enum: ["OPEN", "LOCKED", "RESOLVED", "FAILED", "DISPUTED", "RELEASED"],
+        enum: ["OPEN", "LOCKED", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
         default: "OPEN",
         required: true,
         index: true
@@ -100,6 +100,12 @@ const issueModel = new mongoose.Schema({
             uploadedAt: { type: Date, default: Date.now }
         }
     ],
+
+    disputeEvidence: {
+        mediaUrl: { type: String, default: null },
+        adminRemark: { type: String },
+        disputedAt: { type: Date }
+    },
     // --- NEW: Added thumbnails array ---
     thumbnails: [{
         type: String

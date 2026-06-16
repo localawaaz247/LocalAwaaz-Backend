@@ -84,6 +84,8 @@ const triggerNotification = async ({ recipientId, senderId, issueId, type, messa
                 'ISSUE_CONFIRMED',
                 'ISSUE_RESOLVED',
                 'ISSUE_REJECTED',
+                'ISSUE_DISPUTED',
+                'ISSUE_ORPHANED',
                 'ISSUE_IN_REVIEW',
                 'NEW_COMMENT',
                 'COMMENT_REPLY',

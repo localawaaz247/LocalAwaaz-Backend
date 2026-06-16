@@ -11,6 +11,24 @@ const Inquiry = require('../models/Inquiry');
 const crypto = require('crypto');
 const bcrypt = require('bcrypt');
 const ExcelJS = require('exceljs')
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const s3 = require('../config/s3Client');
+
+const uploadEvidence = multer({
+    dest: 'temp_uploads/',
+    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit
+    fileFilter: (req, file, cb) => {
+        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp'];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error("FILE_TYPE_NOT_SUPPORTED"), false);
+        }
+    }
+});
 
 // Issue Controlling Routes
 // Get all the issues 
@@ -88,17 +106,19 @@ adminRouter.get('/admin/issues', userAuth, adminAuth, async (req, res) => {
     }
 });
 
-// Update the issue
-adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
+// Update the issue (Now with Cloudflare R2 Uploads for Dispute Evidence)
+adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single('media'), async (req, res) => {
     try {
         const { id } = req.params;
         const userId = req.userId; // The Admin making the change
         const io = req.app.get('io');
+        const file = req.file;
 
         // Clone the body so we can safely manipulate it
         const updateData = { ...req.body };
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
+            if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
             return res.status(400).json({ success: false, message: "Invalid Issue ID" });
         }
 
@@ -110,11 +130,40 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
         let newStatus = null;
         let officialRemark = updateData.adminRemark || "";
         let pushQuery = {};
+        let r2PublicUrl = null;
 
-        // 2. Check if the status is part of the update request
+        // 2. Process File Upload to Cloudflare R2 if attached
+        if (file) {
+            try {
+                console.log(`🚀 Starting Direct R2 Upload for Evidence...`);
+                const fileStream = fs.createReadStream(file.path);
+                const uniqueFileName = `evidence-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+
+                const command = new PutObjectCommand({
+                    Bucket: process.env.R2_BUCKET_NAME,
+                    Key: uniqueFileName,
+                    Body: fileStream,
+                    ContentType: file.mimetype,
+                });
+
+                await s3.send(command);
+                r2PublicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
+                console.log(`✅ Evidence Uploaded: ${uniqueFileName}`);
+
+                // Clean up local temp file immediately after successful R2 upload
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            } catch (uploadError) {
+                console.error("🔥 Cloudflare R2 Upload Error:", uploadError);
+                if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+                return res.status(500).json({ success: false, message: "Failed to upload evidence to cloud storage." });
+            }
+        }
+
+        // 3. Check if the status is part of the update request
         if (updateData.status) {
             newStatus = updateData.status.toUpperCase();
-            const validStatus = ['OPEN', 'IN_REVIEW', 'RESOLVED', 'REJECTED'];
+
+            const validStatus = ['OPEN', 'IN_REVIEW', 'RESOLVED', 'REJECTED', 'DISPUTED', 'ORPHANED'];
 
             if (!validStatus.includes(newStatus)) {
                 return res.status(400).json({
@@ -138,13 +187,51 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
             };
         }
 
-        // 3. Build the Mongoose update object dynamically
+        // 4. Build the Mongoose update object dynamically
         const mongooseUpdate = { $set: updateData };
         if (isStatusUpdated) {
             mongooseUpdate.$push = pushQuery;
+
+            // 🟢 Handle Dispute Evidence
+            if (newStatus === 'DISPUTED') {
+                mongooseUpdate.$set.disputeEvidence = {
+                    mediaUrl: r2PublicUrl || null,
+                    adminRemark: officialRemark,
+                    disputedAt: Date.now()
+                };
+            }
+
+            // 🟢 Handle Resolution Evidence (NEW: Includes resolvedByAuthority)
+            if (newStatus === 'RESOLVED') {
+                mongooseUpdate.$set.resolutionEvidence = {
+                    mediaUrl: r2PublicUrl || null,
+                    adminRemark: officialRemark,
+                    resolvedAt: Date.now(),
+                    resolvedByAuthority: updateData.resolvedByAuthority || null
+                };
+
+                // Store explicitly on the root level if you need it for direct querying later
+                if (updateData.resolvedByAuthority) {
+                    mongooseUpdate.$set.resolvedByAuthority = updateData.resolvedByAuthority;
+                }
+
+                // Push the uploaded evidence to the main media array so it shows up in the UI carousel
+                if (r2PublicUrl) {
+                    mongooseUpdate.$push.media = {
+                        url: r2PublicUrl,
+                        type: file.mimetype.startsWith('video') ? 'video' : 'image'
+                    };
+                }
+            }
+
+            // 🟢 Wipe the assigned official if marked as ORPHANED
+            if (newStatus === 'ORPHANED') {
+                mongooseUpdate.$set['bidding.winningBid'] = null;
+                mongooseUpdate.$set['workCycle.commitmentDeadline'] = null;
+            }
         }
 
-        // 4. Execute the update
+        // 5. Execute the update
         const updatedIssue = await Issue.findByIdAndUpdate(
             id,
             mongooseUpdate,
@@ -155,7 +242,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
-        // 5. Trigger Notification Engine ONLY if status changed
+        // 6. Trigger Notification Engine ONLY if status changed
         if (isStatusUpdated) {
             try {
                 let notificationType = null;
@@ -163,22 +250,26 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
                 if (newStatus === 'IN_REVIEW') notificationType = 'ISSUE_IN_REVIEW';
                 if (newStatus === 'REJECTED') notificationType = 'ISSUE_REJECTED';
                 if (newStatus === 'LOCKED') notificationType = 'ISSUE_LOCKED';
+                if (newStatus === 'DISPUTED') notificationType = 'ISSUE_DISPUTED';
+                if (newStatus === 'ORPHANED') notificationType = 'ISSUE_ORPHANED';
 
                 if (notificationType) {
                     // Gather all unique users involved to prevent duplicate pings
                     const recipients = new Set();
 
-                    // A. Add original reporter
                     if (updatedIssue.reportedBy) recipients.add(updatedIssue.reportedBy.toString());
 
-                    // B. Add all citizens who confirmed it
                     if (updatedIssue.confirmations && updatedIssue.confirmations.length > 0) {
                         updatedIssue.confirmations.forEach(c => recipients.add(c.user.toString()));
                     }
 
-                    // C. Add all officials/NGOs who bid on it
                     if (updatedIssue.bidding && updatedIssue.bidding.bids && updatedIssue.bidding.bids.length > 0) {
                         updatedIssue.bidding.bids.forEach(b => recipients.add(b.authorityId.toString()));
+                    }
+
+                    // Also ping the authority marked as resolving it (if they weren't in the bid list)
+                    if (updateData.resolvedByAuthority) {
+                        recipients.add(updateData.resolvedByAuthority);
                     }
 
                     const message = officialRemark
@@ -202,7 +293,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
             }
         }
 
-        // 6. Return success to the admin dashboard
+        // 7. Return success to the admin dashboard
         return res.status(200).json({
             success: true,
             message: isStatusUpdated ? `Issue status updated to ${newStatus}` : "Issue updated successfully",
@@ -210,6 +301,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
         });
 
     } catch (err) {
+        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
         console.error("Server Error in updating issue:", err);
         return res.status(500).json({
             success: false,
@@ -650,33 +742,58 @@ adminRouter.get('/admin/analytics/location', userAuth, adminAuth, async (req, re
 // Sends a system-wide or location-specific notification via In-App and Email
 adminRouter.post('/admin/broadcast', userAuth, adminAuth, async (req, res) => {
     try {
-        const { title, message, targetCity } = req.body;
+        const { title, message, targetState, targetCity, targetRole } = req.body;
 
         if (!message) {
             return res.status(400).json({ success: false, message: "Broadcast message is required" });
         }
 
-        // 1. Find target users (we only need their IDs, the engine handles the rest)
-        let userQuery = { "preferences.globalNotifications": true };
-        if (targetCity) {
-            userQuery["contact.city"] = targetCity;
+        // 1. Build a robust query filter
+        const andConditions = [{ "preferences.globalNotifications": true }];
+
+        // Role Filter
+        if (targetRole) {
+            andConditions.push({ role: targetRole.toLowerCase() });
         }
 
+        // State Filter (checks both normal users and authority profiles)
+        if (targetState) {
+            andConditions.push({
+                $or: [
+                    { 'contact.state': { $regex: `^${targetState}$`, $options: 'i' } },
+                    { 'authorityProfile.assignedState': { $regex: `^${targetState}$`, $options: 'i' } }
+                ]
+            });
+        }
+
+        // City/District Filter (checks both normal users and authority profiles)
+        if (targetCity) {
+            andConditions.push({
+                $or: [
+                    { 'contact.city': { $regex: `^${targetCity}$`, $options: 'i' } },
+                    { 'authorityProfile.assignedDistrict': { $regex: `^${targetCity}$`, $options: 'i' } }
+                ]
+            });
+        }
+
+        const userQuery = { $and: andConditions };
+
+        // 2. Execute Query
         const targetUsers = await User.find(userQuery).select('_id');
 
         if (targetUsers.length === 0) {
             return res.status(404).json({
                 success: false,
-                message: targetCity ? `No users found in ${targetCity}.` : "No users found."
+                message: "No users found matching your selected filters."
             });
         }
 
         const finalMessage = title ? `**${title}**\n${message}` : message;
 
-        // 2. Fetch the socket.io instance (assuming you attached it to req.app)
+        // 3. Fetch the socket.io instance
         const io = req.app.get('io');
 
-        // 3. Fire the Notification Engine for every user in the background
+        // 4. Fire the Notification Engine for every matched user in the background
         targetUsers.forEach(user => {
             triggerNotification({
                 recipientId: user._id,
@@ -1394,6 +1511,268 @@ adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => 
             success: false,
             message: "Server Error: Cannot delete the issue"
         });
+    }
+});
+
+// ==========================================
+// ORPHANED / STAGNANT ISSUES (TRIAGE CENTER)
+// ==========================================
+
+// 1. Fetch Orphaned Issues (> 7 Days Old, Still OPEN)
+adminRouter.get('/admin/orphaned', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { page = 1, limit = 20, state, city } = req.query;
+
+        // Calculate the exact timestamp for 7 days ago
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const query = {
+            $or: [
+                { status: 'ORPHANED' },
+                { status: 'OPEN', createdAt: { $lte: sevenDaysAgo } }
+            ],
+            isDeleted: false
+        };
+
+        if (state) query['location.state'] = { $regex: `^${state}$`, $options: 'i' };
+        if (city) query['location.city'] = { $regex: `^${city}$`, $options: 'i' };
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const [issues, total] = await Promise.all([
+            // Sort by oldest first so the most ignored issues are at the very top
+            Issue.find(query).sort({ createdAt: 1 }).skip(skip).limit(parseInt(limit)).populate('reportedBy', 'name role'),
+            Issue.countDocuments(query)
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                issues,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(total / limit),
+                    totalIssues: total
+                }
+            }
+        });
+    } catch (err) {
+        console.error("Error fetching orphaned issues:", err);
+        return res.status(500).json({ success: false, message: "Server Error fetching orphaned issues" });
+    }
+});
+
+// 2. Artificial Score Boost (Bounty System)
+adminRouter.patch('/admin/issue/:id/boost', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { bonusPoints } = req.body;
+        if (!bonusPoints || isNaN(bonusPoints)) return res.status(400).json({ success: false, message: "Valid bonus points required" });
+
+        const issue = await Issue.findByIdAndUpdate(
+            req.params.id,
+            {
+                $inc: { impactScore: Number(bonusPoints) },
+                $push: { auditLog: { action: 'SCORE_BOOSTED', performedBy: req.userId, details: `Admin artificially boosted the impact score by ${bonusPoints} to attract bidders.` } }
+            },
+            { new: true }
+        );
+
+        return res.status(200).json({ success: true, message: `Score boosted by ${bonusPoints}`, data: issue });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Failed to boost score" });
+    }
+});
+
+// 3. Re-Categorize & Prioritize
+adminRouter.patch('/admin/issue/:id/recategorize', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { category, priority } = req.body;
+
+        const issue = await Issue.findByIdAndUpdate(
+            req.params.id,
+            {
+                $set: { category, priority },
+                $push: { auditLog: { action: 'RECATEGORIZED', performedBy: req.userId, details: `Admin re-categorized to ${category} and set priority to ${priority}.` } }
+            },
+            { new: true }
+        );
+
+        return res.status(200).json({ success: true, message: "Issue re-categorized successfully", data: issue });
+    } catch (err) {
+        return res.status(500).json({ success: false, message: "Failed to recategorize issue" });
+    }
+});
+
+// 4. Localized SOS Broadcast
+adminRouter.post('/admin/issue/:id/sos', userAuth, adminAuth, async (req, res) => {
+    try {
+        const issue = await Issue.findById(req.params.id);
+        if (!issue) return res.status(404).json({ success: false, message: 'Issue not found' });
+
+        const district = issue.location?.city || issue.location?.district;
+        if (!district) return res.status(400).json({ success: false, message: 'Issue has no valid district for SOS routing' });
+
+        // Find all approved officials/NGOs assigned to or living in this district
+        const localAuthorities = await User.find({
+            role: { $in: ['official', 'ngo'] },
+            'authorityProfile.verificationStatus': 'APPROVED',
+            $or: [
+                { 'authorityProfile.assignedDistrict': { $regex: `^${district}$`, $options: 'i' } },
+                { 'contact.city': { $regex: `^${district}$`, $options: 'i' } }
+            ]
+        }).select('_id');
+
+        if (localAuthorities.length === 0) {
+            return res.status(404).json({ success: false, message: `No verified authorities found in ${district} to receive the SOS.` });
+        }
+
+        const io = req.app.get('io');
+        const sosMessage = `🚨 URGENT: A critical issue in ${district} has been ignored for over 7 days. High CSI reward available for immediate resolution!`;
+
+        // Blast the notification
+        localAuthorities.forEach(auth => {
+            triggerNotification({
+                recipientId: auth._id,
+                senderId: req.userId,
+                issueId: issue._id,
+                type: 'SYSTEM_BROADCAST',
+                message: sosMessage,
+                io: io
+            }).catch(e => console.log("SOS send error:", e));
+        });
+
+        // Log the blast
+        await Issue.findByIdAndUpdate(issue._id, {
+            $push: { auditLog: { action: 'SOS_BROADCAST_SENT', performedBy: req.userId, details: `SOS broadcast fired to ${localAuthorities.length} authorities in ${district}.` } }
+        });
+
+        return res.status(200).json({ success: true, message: `SOS blasted to ${localAuthorities.length} local authorities!` });
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Failed to send SOS broadcast" });
+    }
+});
+
+// ==========================================
+// ESCALATION & TRIAGE CENTER (Orphaned + Disputed)
+// ==========================================
+
+adminRouter.get('/admin/triage', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { page = 1, limit = 20, state, city, status } = req.query;
+
+        // Calculate the exact timestamp for 7 days ago (for auto-orphaned detection)
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+        const orConditions = [];
+
+        // If no status filter is applied, or if 'ORPHANED' is explicitly selected
+        if (!status || status === 'ORPHANED') {
+            orConditions.push({ status: 'ORPHANED' });
+            orConditions.push({ status: 'OPEN', createdAt: { $lte: sevenDaysAgo } });
+        }
+
+        // If no status filter is applied, or if 'DISPUTED' is explicitly selected
+        if (!status || status === 'DISPUTED') {
+            orConditions.push({ status: 'DISPUTED' });
+        }
+
+        const query = {
+            $or: orConditions,
+            isDeleted: false
+        };
+
+        if (state) query['location.state'] = { $regex: `^${state}$`, $options: 'i' };
+        if (city) query['location.city'] = { $regex: `^${city}$`, $options: 'i' };
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const [issues, total] = await Promise.all([
+            // Sort by oldest first so the most ignored/stalled issues are at the very top
+            Issue.find(query).sort({ createdAt: 1 }).skip(skip).limit(parseInt(limit)).populate('reportedBy', 'name role'),
+            Issue.countDocuments(query)
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                issues,
+                pagination: {
+                    currentPage: parseInt(page),
+                    totalPages: Math.ceil(total / limit),
+                    totalIssues: total
+                }
+            }
+        });
+    } catch (err) {
+        console.error("Error fetching triage issues:", err);
+        return res.status(500).json({ success: false, message: "Server Error fetching triage issues" });
+    }
+});
+
+// Export Triage Issues to Excel
+adminRouter.get('/admin/export/triage', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { state, city, status } = req.query;
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        const orConditions = [];
+
+        if (!status || status === 'ORPHANED') {
+            orConditions.push({ status: 'ORPHANED' });
+            orConditions.push({ status: 'OPEN', createdAt: { $lte: sevenDaysAgo } });
+        }
+        if (!status || status === 'DISPUTED') {
+            orConditions.push({ status: 'DISPUTED' });
+        }
+
+        const query = { $or: orConditions, isDeleted: false };
+        if (state) query['location.state'] = { $regex: `^${state}$`, $options: 'i' };
+        if (city) query['location.city'] = { $regex: `^${city}$`, $options: 'i' };
+
+        const issues = await Issue.find(query).sort({ createdAt: 1 }).populate('reportedBy', 'name email role');
+
+        const workbook = new ExcelJS.Workbook();
+        const worksheet = workbook.addWorksheet('Triage Export');
+
+        worksheet.columns = [
+            { header: 'Issue ID', key: '_id', width: 25 },
+            { header: 'Title', key: 'title', width: 35 },
+            { header: 'Escalation Type', key: 'escalationType', width: 20 },
+            { header: 'Category', key: 'category', width: 20 },
+            { header: 'Impact Score', key: 'impactScore', width: 15 },
+            { header: 'City', key: 'city', width: 20 },
+            { header: 'State', key: 'state', width: 20 },
+            { header: 'Reported By', key: 'reporterName', width: 25 },
+            { header: 'Days Stagnant', key: 'stagnant', width: 15 },
+            { header: 'Created At', key: 'createdAt', width: 20 }
+        ];
+
+        issues.forEach(i => {
+            const isDisputed = i.status === 'DISPUTED';
+            const stagnantDays = Math.floor((new Date() - new Date(i.createdAt)) / (1000 * 60 * 60 * 24));
+
+            worksheet.addRow({
+                _id: i._id.toString(),
+                title: i.title,
+                escalationType: isDisputed ? 'DISPUTED' : 'ORPHANED',
+                category: i.category || 'N/A',
+                impactScore: i.impactScore || 0,
+                city: i.location?.city || 'N/A',
+                state: i.location?.state || 'N/A',
+                reporterName: i.isAnonymous ? 'Anonymous' : (i.reportedBy?.name || 'Unknown'),
+                stagnant: stagnantDays,
+                createdAt: new Date(i.createdAt).toLocaleString()
+            });
+        });
+
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', 'attachment; filename=Triage_Escalations.xlsx');
+
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (err) {
+        console.error("Export triage error:", err);
+        res.status(500).send('Error generating Excel file');
     }
 });
 

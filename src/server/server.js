@@ -22,6 +22,7 @@ const visitsRouter = require('../routes/visitsRouter');
 const appRouter = require('../routes/appRouter');
 const authorityRouter = require('../routes/authorityRouter');
 const startAccountabilityCron = require('../../jobs/accountability');
+const startOrphanIssuesJob = require('../../jobs/orphanStagnantIssues');
 
 const app = express();
 const server = http.createServer(app);
@@ -64,6 +65,7 @@ io.on('connection', (socket) => {
 // Start the background cron jobs
 startGarbageCollector();
 startAccountabilityCron(io);
+startOrphanIssuesJob(io);
 app.set("trust proxy", 1);
 app.use(cors({
     origin: [
