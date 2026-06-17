@@ -102,7 +102,7 @@ authRouter.post('/auth/login', async (req, res) => {
         // GATEWAY: BLOCK UNVERIFIED AUTHORITIES (NGO/OFFICIAL)
         // ---------------------------------------------------------
         if (['official', 'ngo'].includes(user.role)) {
-            if (!user.authorityProfile || !user.authorityProfile.isVerified) {
+            if (!user.authorityProfile || user.authorityProfile.verificationStatus !== 'APPROVED') {
                 return res.status(403).json({
                     success: false,
                     message: "Your application is still under review by the Admin. Please wait for verification."

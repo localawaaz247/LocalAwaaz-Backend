@@ -947,7 +947,7 @@ adminRouter.patch('/admin/approve-authority/:id', userAuth, adminAuth, async (re
             userId,
             {
                 $set: {
-                    'authorityProfile.isVerified': true,
+                    'authorityProfile.verificationStatus': 'APPROVED',
                     password: hashedPassword
                 }
             },
