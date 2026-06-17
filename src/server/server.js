@@ -14,15 +14,17 @@ const userRouter = require('../routes/userRouter');
 const issueRouter = require('../routes/issueRouter');
 const contactRouter = require('../routes/contactRouter');
 const mediaRouter = require('../routes/mediaRouter');
-const startGarbageCollector = require('../utils/garbageCollector');
 const lokAiRouter = require('../routes/lokAiRouter');
 const adminRouter = require('../routes/adminRouter');
 const cron = require('node-cron');
 const visitsRouter = require('../routes/visitsRouter');
 const appRouter = require('../routes/appRouter');
 const authorityRouter = require('../routes/authorityRouter');
-const startAccountabilityCron = require('../../jobs/accountability');
+const startGarbageCollector = require('../../jobs/garbageCollector');
+const startMasterCron = require('../../jobs/masterCron');
 const startOrphanIssuesJob = require('../../jobs/orphanStagnantIssues');
+const startLeaderboardCron = require('../../jobs/leaderBoardCron');
+const leaderRouter = require('../routes/leaderRouter');
 
 const app = express();
 const server = http.createServer(app);
@@ -63,9 +65,6 @@ io.on('connection', (socket) => {
 
 // require('../workers/mediaWorker')(io);
 // Start the background cron jobs
-startGarbageCollector();
-startAccountabilityCron(io);
-startOrphanIssuesJob(io);
 app.set("trust proxy", 1);
 app.use(cors({
     origin: [
@@ -112,6 +111,7 @@ app.use('/', lokAiRouter);
 app.use('/', adminRouter);
 app.use('/', appRouter);
 app.use('/', authorityRouter);
+app.use('/', leaderRouter);
 app.use('/api/community-stats', visitsRouter);
 
 // A simple route to keep the server awake
@@ -138,6 +138,10 @@ const startServer = async () => {
         const Port = process.env.PORT || 1111
         server.listen(Port, () => {
             console.log("Server ONLINE");
+            startGarbageCollector();
+            startMasterCron(io);
+            startOrphanIssuesJob(io);
+            startLeaderboardCron(io);
         })
         server.on("error", (err) => {
             console.error("Server encountered an error:", err.message);

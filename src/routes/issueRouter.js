@@ -195,7 +195,7 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
 // ---------------------------------------------------------
 // GET: Get issue accoring to issue id
 // ---------------------------------------------------------
-issueRouter.get('/issue/:id', userAuth, statusAuth, async (req, res) => {
+issueRouter.get('/issue/:id', async (req, res) => {
     try {
         const { id } = req.params;
         if (!mongoose.Types.ObjectId.isValid(id)) {

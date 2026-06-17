@@ -81,7 +81,7 @@ const issueModel = new mongoose.Schema({
     ],
     status: {
         type: String,
-        enum: ["OPEN", "LOCKED", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
+        enum: ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
         default: "OPEN",
         required: true,
         index: true
@@ -128,17 +128,17 @@ const issueModel = new mongoose.Schema({
      * ============================
      */
     bidding: {
-        // Automatically set to 24 hours after Issue creation
-        windowEndsAt: { type: Date },
+        auctionStartsAt: { type: Date }, // Triggered on 1st bid
+        auctionEndsAt: { type: Date },   // Exactly 24h after auctionStartsAt
 
-        // Array of all bids placed on this issue
         bids: [{
             authorityId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-            proposedTimeHours: { type: Number, required: true },
+            proposedTimeValue: { type: Number, required: true }, // e.g., 24
+            proposedTimeUnit: { type: String, enum: ['HOURS', 'DAYS', 'WEEKS', 'MONTHS'], required: true }, // e.g., DAYS
+            proposedTimeInHours: { type: Number, required: true }, // Normalized for easy DB sorting
             timestamp: { type: Date, default: Date.now }
         }],
 
-        // The winner of the bid (who locked it)
         winningBid: {
             authorityId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
             commitmentTimeHours: { type: Number },
@@ -148,19 +148,45 @@ const issueModel = new mongoose.Schema({
 
     /**
      * ============================
-     * THE WORK CYCLE & EXTENSIONS
+     * THE WORK CYCLE & HANDOVERS
      * ============================
      */
     workCycle: {
-        // Calculate as: acceptedAt + commitmentTimeHours
         commitmentDeadline: { type: Date },
 
+        // 🟢 NEW: For pausing the clock during Extension Requests
+        isClockPaused: { type: Boolean, default: false },
+        pausedAt: { type: Date },
+
         extensionRequests: [{
-            hoursRequested: { type: Number, required: true, max: 24 }, // Max 24h as discussed
+            requestedTimeValue: { type: Number, required: true },
+            requestedTimeUnit: { type: String, enum: ['HOURS', 'DAYS', 'WEEKS', 'MONTHS'], required: true },
+            hoursRequested: { type: Number, required: true }, // Normalized
             reason: { type: String, required: true },
             requestedAt: { type: Date, default: Date.now },
-            status: { type: String, enum: ['PENDING', 'APPROVED'], default: 'APPROVED' } // Auto-approved up to 24h
+            status: { type: String, enum: ['PENDING', 'APPROVED', 'DENIED'], default: 'PENDING' },
+            adminRemark: { type: String }
         }],
+
+        // 🟢 NEW: The Ghost Protocol Timer
+        ghostTimerExpiresAt: { type: Date },
+
+        // 🟢 NEW: Mandatory Proof of Partial Work
+        handoverReports: [{
+            authorityId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+            completionPercentage: { type: Number, min: 0, max: 100, required: true },
+            photoUrl: { type: String, required: true },
+            reasonForFailure: { type: String },
+            createdAt: { type: Date, default: Date.now }
+        }],
+
+        // 🟢 NEW: CSI Verification Escrow
+        escrow: {
+            isEscrowActive: { type: Boolean, default: false },
+            pointsHolding: { type: Number, default: 0 },
+            citizenVerdict: { type: String, enum: ['PENDING', 'ACCEPTED', 'OPPOSED'], default: 'PENDING' },
+            autoReleaseAt: { type: Date } // 72 hours after marked resolved
+        },
 
         // If they release/abandon the job
         releaseApology: { type: String },
@@ -195,18 +221,19 @@ const issueModel = new mongoose.Schema({
 },
     { timestamps: true });
 
-//Essential GeoSpatial Index
+// Essential GeoSpatial Index
 issueModel.index({ 'location.geoData': '2dsphere' });
+
 // Optimized for finding issues by status within a city (e.g., "Open issues in Mumbai")
 issueModel.index({ 'location.city': 1, status: 1 });
 issueModel.index({ 'location.pinCode': 1, status: 1 });
 issueModel.index({ 'title': 'text' });
 
-// Find issues that are OPEN and the bidding window has expired (For Auto-Dispute)
-issueModel.index({ status: 1, 'bidding.windowEndsAt': 1 });
-
-// Find issues that are LOCKED and the deadline has passed (For Auto-Fail)
+// 🟢 CRITICAL CRON INDEXES: Optimized for our auto-state-machine background workers
+issueModel.index({ status: 1, 'bidding.auctionEndsAt': 1 });
 issueModel.index({ status: 1, 'workCycle.commitmentDeadline': 1 });
+issueModel.index({ status: 1, 'workCycle.ghostTimerExpiresAt': 1 });
+issueModel.index({ 'workCycle.escrow.isEscrowActive': 1, 'workCycle.escrow.autoReleaseAt': 1 });
 
 const Issue = mongoose.model('Issue', issueModel);
 

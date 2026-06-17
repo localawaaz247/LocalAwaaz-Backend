@@ -60,26 +60,24 @@ const userSchema = new mongoose.Schema({
      * This object is only populated if role is 'official' or 'ngo'.
      */
     authorityProfile: {
-        departmentName: { type: String, trim: true }, // e.g., "PWD", "GreenEarth NGO"
-        expertiseTags: [{ type: String, uppercase: true }], // e.g., ["ROADS", "SANITATION", "ELECTRICAL"]
+        departmentName: { type: String, trim: true },
+        expertiseTags: [{ type: String, uppercase: true }],
 
-        // The Triple-Match Routing constraints
         assignedState: { type: String, trim: true },
         assignedDistrict: { type: String, trim: true },
 
-        // Verification & Gatekeeper
-        verificationStatus: {
-            type: String,
-            enum: ['PENDING', 'APPROVED', 'REJECTED'],
-            default: 'PENDING'
-        },
-        idProofUrl: { type: String }, // Link to their ID card/Registration paper
+        verificationStatus: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
+        idProofUrl: { type: String },
 
-        // Performance Metrics (The Leaderboard Data)
-        csiScore: { type: Number, default: 500 }, // Starting baseline score
+        // 🟢 NEW: Active Job Cap & Escrow Tracking
+        activeJobsCount: { type: Number, default: 0 }, // Max 5 limit enforced in controller
+        csiInEscrow: { type: Number, default: 0 },     // Points awaiting citizen verification
+
+        // Performance Metrics
+        csiScore: { type: Number, default: 500 },
         jobsCompleted: { type: Number, default: 0 },
         jobsFailed: { type: Number, default: 0 },
-        jobsReleased: { type: Number, default: 0 } // Jobs they abandoned
+        jobsReleased: { type: Number, default: 0 }
     },
 
     /**
