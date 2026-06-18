@@ -789,12 +789,10 @@ adminRouter.post('/admin/broadcast', userAuth, adminAuth, async (req, res) => {
         // 1. Build a robust query filter
         const andConditions = [{ "preferences.globalNotifications": true }];
 
-        // Role Filter
         if (targetRole) {
             andConditions.push({ role: targetRole.toLowerCase() });
         }
 
-        // State Filter (checks both normal users and authority profiles)
         if (targetState) {
             andConditions.push({
                 $or: [
@@ -804,7 +802,6 @@ adminRouter.post('/admin/broadcast', userAuth, adminAuth, async (req, res) => {
             });
         }
 
-        // City/District Filter (checks both normal users and authority profiles)
         if (targetCity) {
             andConditions.push({
                 $or: [
@@ -827,25 +824,54 @@ adminRouter.post('/admin/broadcast', userAuth, adminAuth, async (req, res) => {
         }
 
         const finalMessage = title ? `**${title}**\n${message}` : message;
-
-        // 3. Fetch the socket.io instance
         const io = req.app.get('io');
+        const adminId = req.userId;
 
-        // 4. Fire the Notification Engine for every matched user in the background
-        targetUsers.forEach(user => {
-            triggerNotification({
-                recipientId: user._id,
-                senderId: req.userId, // The Admin's ID
-                issueId: null, // Broadcasts aren't tied to a specific issue
-                type: 'SYSTEM_BROADCAST',
-                message: finalMessage,
-                io: io
-            }).catch(err => console.error(`Broadcast failed for user ${user._id}:`, err));
-        });
+        // 3. Define the Background Batch Worker
+        const processBroadcastInBackground = async (users) => {
+            const BATCH_SIZE = 500; // Adjust based on your server limits
+            console.log(`[BROADCAST] Starting background processing for ${users.length} users in batches of ${BATCH_SIZE}.`);
 
+            for (let i = 0; i < users.length; i += BATCH_SIZE) {
+                const batch = users.slice(i, i + BATCH_SIZE);
+                const currentBatchNum = Math.floor(i / BATCH_SIZE) + 1;
+                const totalBatches = Math.ceil(users.length / BATCH_SIZE);
+
+                console.log(`[BROADCAST] Processing batch ${currentBatchNum} of ${totalBatches}...`);
+
+                // Process the current batch concurrently
+                await Promise.all(
+                    batch.map(user =>
+                        triggerNotification({
+                            recipientId: user._id,
+                            senderId: adminId,
+                            issueId: null,
+                            type: 'SYSTEM_BROADCAST',
+                            message: finalMessage,
+                            io: io
+                        }).catch(err => console.error(`[BROADCAST ERROR] Failed for user ${user._id}:`, err))
+                    )
+                );
+
+                // Add a tiny breather between batches to prevent event loop blocking
+                // and to respect Brevo/Firebase rate limits.
+                if (i + BATCH_SIZE < users.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay
+                }
+            }
+
+            console.log(`[BROADCAST] Successfully completed for all ${users.length} users.`);
+        };
+
+        // 4. Fire the worker WITHOUT 'await' so it runs independently in the background
+        processBroadcastInBackground(targetUsers).catch(err =>
+            console.error('[BROADCAST FATAL ERROR] Background worker crashed:', err)
+        );
+
+        // 5. Immediately release the client
         return res.status(200).json({
             success: true,
-            message: `Broadcast is processing for ${targetUsers.length} users.`,
+            message: `Broadcast is processing for ${targetUsers.length} users in the background.`,
         });
 
     } catch (err) {
