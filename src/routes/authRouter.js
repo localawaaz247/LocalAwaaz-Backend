@@ -1,5 +1,4 @@
 const express = require('express');
-const validateSignUpData = require('../utils/validateCitizenSignupData');
 const OtpModel = require('../models/OtpModel');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
@@ -17,8 +16,9 @@ const authRouter = express.Router();
 
 const { OAuth2Client } = require('google-auth-library');
 const generateUniqueUserName = require('../utils/generateUniqueUserName');
-const validateAuthoritySignupData = require('../utils/validateAuthoritySignUpData');
 const triggerNotification = require('../utils/notificationService');
+const validateAuthoritySignupData = require('../utils/validateAuthoritySignupData');
+const validateCitizenSignupData = require('../utils/validateCitizenSignupData');
 // Note: You will eventually need to add your Android/iOS Client IDs here too, 
 // but we can start with the web client ID for the backend verification.
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -31,7 +31,7 @@ authRouter.post('/auth/register', async (req, res) => {
         const { password, name, email, gender } = req.body;
 
         // 1. FAIL FAST: Validate payload & check duplicates first
-        validateSignUpData(req);
+        validateCitizenSignupData(req);
         await checkUniqueness(req);
 
         // 2. FAIL FAST: Verify OTP session exists and is verified

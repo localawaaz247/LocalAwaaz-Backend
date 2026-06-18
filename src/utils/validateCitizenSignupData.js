@@ -1,6 +1,6 @@
 const validate = require('validator');
 
-const validateLocalSignupData = (req) => {
+const validateCitizenSignupData = (req) => {
     const { password, email, name, gender } = req.body; //mobile can also be send
     const allowedGender = ['male', 'female', 'other'];
     if (!name || name.trim().length < 4) {
@@ -17,4 +17,4 @@ const validateLocalSignupData = (req) => {
     }
     return true;
 }
-module.exports = validateLocalSignupData
+module.exports = validateCitizenSignupData
