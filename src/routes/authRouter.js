@@ -17,7 +17,7 @@ const authRouter = express.Router();
 
 const { OAuth2Client } = require('google-auth-library');
 const generateUniqueUserName = require('../utils/generateUniqueUserName');
-const validateAuthoritySignupData = require('../utils/validateAuthoritySignUpDate');
+const validateAuthoritySignupData = require('../utils/validateAuthoritySignUpData');
 const triggerNotification = require('../utils/notificationService');
 // Note: You will eventually need to add your Android/iOS Client IDs here too, 
 // but we can start with the web client ID for the backend verification.
