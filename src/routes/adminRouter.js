@@ -712,10 +712,15 @@ adminRouter.patch('/admin/user/:userId', userAuth, adminAuth, async (req, res) =
 adminRouter.get('/admin/analytics/summary', userAuth, adminAuth, async (req, res) => {
     try {
         const [totalUsers, pendingRequests, totalOfficials, totalNGOs, totalIssues, statusCounts] = await Promise.all([
-            User.countDocuments({ role: 'user' }), // Only standard users
-            User.countDocuments({ role: { $in: ['official', 'ngo'] }, 'authorityProfile.verificationStatus': 'PENDING' }),
+
+            User.countDocuments({ role: { $nin: ['official', 'ngo', 'other', 'admin'] } }),
+
+            User.countDocuments({ role: { $in: ['official', 'ngo', 'other'] }, 'authorityProfile.verificationStatus': 'PENDING' }),
+
             User.countDocuments({ role: 'official', 'authorityProfile.verificationStatus': 'APPROVED' }),
-            User.countDocuments({ role: 'ngo', 'authorityProfile.verificationStatus': 'APPROVED' }),
+
+            User.countDocuments({ role: { $in: ['ngo', 'other'] }, 'authorityProfile.verificationStatus': 'APPROVED' }),
+
             Issue.countDocuments(),
             Issue.aggregate([{ $group: { _id: "$status", count: { $sum: 1 } } }])
         ]);
@@ -979,10 +984,9 @@ adminRouter.patch('/admin/inquiry/:id', userAuth, adminAuth, async (req, res) =>
 adminRouter.get('/admin/pending-authorities', userAuth, adminAuth, async (req, res) => {
     try {
         const pendingUsers = await User.find({
-            role: { $in: ['official', 'ngo'] },
-            'authorityProfile.isVerified': false
+            role: { $in: ['official', 'ngo', 'other'] },
+            'authorityProfile.verificationStatus': 'PENDING'
         }).select('name userName contact role authorityProfile createdAt');
-
         return res.status(200).json({
             success: true,
             message: "Pending authorities fetched",
@@ -1054,7 +1058,7 @@ adminRouter.get('/admin/authorities', userAuth, adminAuth, async (req, res) => {
     try {
         const { status } = req.query; // PENDING, APPROVED, or REJECTED
 
-        const query = { role: { $in: ['official', 'ngo'] } };
+        const query = { role: { $in: ['official', 'ngo', 'other'] } };
         if (status) {
             query['authorityProfile.verificationStatus'] = status.toUpperCase();
         }

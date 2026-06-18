@@ -18,7 +18,7 @@ const checkIssueCreation = (req) => {
 
     // Define the list of allowed categories for strict validation
     const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SAFETY', 'SANITATION', 'GARBAGE'
-        , 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'
+        , 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION', 'OTHER'
     ];
 
     // ============================================================

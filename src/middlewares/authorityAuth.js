@@ -6,7 +6,7 @@ const authorityAuth = async (req, res, next) => {
         const user = await User.findById(req.userId);
 
         // 2. Check if they exist and have the correct role
-        if (!user || !['official', 'ngo'].includes(user.role)) {
+        if (!user || !['official', 'ngo', 'other'].includes(user.role)) {
             return res.status(403).json({
                 success: false,
                 message: "Authority access denied. Only verified NGOs or Officials can perform this action."

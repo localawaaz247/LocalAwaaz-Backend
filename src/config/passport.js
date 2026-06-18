@@ -1,6 +1,7 @@
 const passport = require("passport");
 const GoogleStrategy = require("passport-google-oauth20").Strategy;
 const User = require("../models/User");
+const generateUniqueUserName = require("../utils/generateUniqueUserName");
 require('dotenv').config();
 
 passport.use(
@@ -62,14 +63,17 @@ passport.use(
 
                     } else {
                         // 5. Create entirely new user
+                        const autoUserName = await generateUniqueUserName(email);
+
                         user = await User.create({
                             name: profile.displayName,
+                            userName: autoUserName,
                             contact: { email },
                             googleId: profile.id,
                             profilePic: profile.photos?.[0]?.value,
                             isEmailVerified: true,
                             civilScore: 10,
-                            isProfileComplete: false,
+                            isProfileComplete: true,
                         });
                     }
                 }

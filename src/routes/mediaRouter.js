@@ -17,6 +17,7 @@ const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
 const TempMedia = require('../models/TempMedia');
 const statusAuth = require('../middlewares/statusAuth');
+const uploadAuth = require('../middlewares/uploadAuth');
 
 const mediaRouter = express.Router();
 
@@ -239,7 +240,7 @@ const uploadMedia = multer({
 
 const uploadMediaMiddleware = uploadMedia.single('media'); // Matches formData.append('media', file)
 
-mediaRouter.post("/media/upload", userAuth, statusAuth, (req, res, next) => {
+mediaRouter.post("/media/upload", uploadAuth, (req, res, next) => {
     uploadMediaMiddleware(req, res, (err) => {
         if (err instanceof multer.MulterError) {
             if (err.code === 'LIMIT_FILE_SIZE') {

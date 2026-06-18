@@ -50,8 +50,11 @@ const userSchema = new mongoose.Schema({
      */
     role: {
         type: String,
-        enum: ['user', 'admin', 'official', 'ngo', 'moderator'],
+        enum: ['user', 'admin', 'official', 'ngo', 'other'],
         default: "user"
+    },
+    otherRole: {
+        type: String
     },
     /**
      * ============================
@@ -62,6 +65,7 @@ const userSchema = new mongoose.Schema({
     authorityProfile: {
         departmentName: { type: String, trim: true },
         expertiseTags: [{ type: String, uppercase: true }],
+        organizationName: { type: String },
 
         assignedState: { type: String, trim: true },
         assignedDistrict: { type: String, trim: true },
@@ -181,15 +185,15 @@ const userSchema = new mongoose.Schema({
          * - Sparse index allows null values
          * - Validated to be exactly 10 digits
          */
-        // mobile: {
-        //     type: Number,
-        //     sparse: true,
-        //     unique: [true, "Mobile Number already registered"],
-        //     validate: {
-        //         validator: v => v === null || v.toString().length === 10,
-        //         message: "Mobile number must be 10 digits"
-        //     }
-        // },
+        mobile: {
+            type: Number,
+            sparse: true,
+            unique: [true, "Mobile Number already registered"],
+            validate: {
+                validator: v => v === null || v.toString().length === 10,
+                message: "Mobile number must be 10 digits"
+            }
+        },
 
         /**
          * Address information

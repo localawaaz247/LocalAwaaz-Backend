@@ -39,6 +39,8 @@ async function sendMail({ email, generatedOtp, purpose = "REGISTER", notificatio
         if (type === 'ISSUE_IN_REVIEW') emailSubject = "Officials are looking at your issue.";
         if (type === 'ISSUE_REJECTED') emailSubject = "Your issue got Rejected";
         if (type === 'NEW_COMMENT' || type === 'COMMENT_REPLY') emailSubject = "New comment on your issue";
+        if (type === 'AUTHORITY_APPROVED') emailSubject = "Welcome to LocalAwaaz - Account Approved!";
+        if (type === 'AUTHORITY_REJECTED') emailSubject = "Update on your LocalAwaaz Application";
 
         // Generate the HTML
         emailHtml = generateNotificationEmail(type, message, issueId);

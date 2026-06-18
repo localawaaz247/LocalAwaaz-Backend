@@ -1,6 +1,6 @@
 const express = require('express');
-const validateSignUpData = require('../utils/validateLocalSignupData');
-const OtpModel = require('../models/Otp');
+const validateSignUpData = require('../utils/validateCitizenSignupData');
+const OtpModel = require('../models/OtpModel');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const User = require('../models/User');
@@ -16,6 +16,9 @@ const Inquiry = require('../models/Inquiry');
 const authRouter = express.Router();
 
 const { OAuth2Client } = require('google-auth-library');
+const generateUniqueUserName = require('../utils/generateUniqueUserName');
+const validateAuthoritySignupData = require('../utils/validateAuthoritySignUpDate');
+const triggerNotification = require('../utils/notificationService');
 // Note: You will eventually need to add your Android/iOS Client IDs here too, 
 // but we can start with the web client ID for the backend verification.
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -25,40 +28,39 @@ const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
  */
 authRouter.post('/auth/register', async (req, res) => {
     try {
-        const {
-            userName, password, name, email, gender, country, state, city, pinCode
-        } = req.body;
+        const { password, name, email, gender } = req.body;
 
-        // Validate payload & check duplicates
+        // 1. FAIL FAST: Validate payload & check duplicates first
         validateSignUpData(req);
         await checkUniqueness(req);
 
-        const role = 'user';
-        const hashedPassword = await bcrypt.hash(password, 10);
-        const isProfileComplete = true;
-
-        // Verify OTP session exists and is verified
+        // 2. FAIL FAST: Verify OTP session exists and is verified
         const otpRecord = await OtpModel.findOne({ email });
         if (!otpRecord || !otpRecord.isVerified) {
             return res.status(400).json({ success: false, message: "Email is not verified" });
         }
 
-        // Prevent session hijacking
-        if (otpRecord.userName !== userName) {
-            return res.status(400).json({
-                success: false,
-                message: "Security Mismatch: The verified email is bound to a different username."
-            });
-        }
+        // 3. HEAVY LIFTING: Generate username & hash password ONLY if everything else passed
+        const userName = await generateUniqueUserName(email);
+        const hashedPassword = await bcrypt.hash(password, 10);
 
-        // Create User
+        const role = 'user';
+        const isProfileComplete = true;
+
+        // 4. Create User
         await User.create({
-            userName, password: hashedPassword, role, name, gender, isProfileComplete,
-            isEmailVerified: true, civilScore: 10,
-            contact: { email, country, state, city, pinCode }
+            userName,
+            password: hashedPassword,
+            role,
+            name,
+            gender,
+            isProfileComplete,
+            isEmailVerified: true,
+            civilScore: 10,
+            contact: { email: email.toLowerCase() } // Enforce lowercase here to match checkUniqueness
         });
 
-        // Cleanup OTP
+        // 5. Cleanup OTP
         await OtpModel.deleteOne({ email });
 
         res.status(200).json({ success: true, message: "Signup Successful" });
@@ -101,7 +103,7 @@ authRouter.post('/auth/login', async (req, res) => {
         // ---------------------------------------------------------
         // GATEWAY: BLOCK UNVERIFIED AUTHORITIES (NGO/OFFICIAL)
         // ---------------------------------------------------------
-        if (['official', 'ngo'].includes(user.role)) {
+        if (['official', 'ngo', 'other'].includes(user.role)) {
             if (!user.authorityProfile || user.authorityProfile.verificationStatus !== 'APPROVED') {
                 return res.status(403).json({
                     success: false,
@@ -490,7 +492,7 @@ authRouter.post('/auth/google/native', async (req, res) => {
                     profilePic: payload.picture,
                     isEmailVerified: true,
                     civilScore: 10,
-                    isProfileComplete: false,
+                    isProfileComplete: true,
                 });
             }
         }
@@ -542,65 +544,94 @@ authRouter.post('/auth/google/native', async (req, res) => {
  */
 authRouter.post('/auth/register-authority', async (req, res) => {
     try {
+        // 1. Validate structure and check database uniqueness
+        validateAuthoritySignupData(req);
+        await checkUniqueness(req);
+
         const {
-            name, email, password, role, // role must be 'official' or 'ngo'
-            departmentName, expertiseTags,
-            assignedState, assignedDistrict, idProofUrl,
-            country, state, city, pinCode
+            name, email, role, otherRole, organizationName, departmentName,
+            otherDepartment, assignedState, assignedDistrict,
+            expertiseTags, idProofUrl
         } = req.body;
 
-        // 1. Validate Input Basics
-        if (!['official', 'ngo'].includes(role)) {
-            return res.status(400).json({ success: false, message: "Role must be 'official' or 'ngo'" });
-        }
-        if (!departmentName || !assignedDistrict || !assignedState || !idProofUrl) {
-            return res.status(400).json({ success: false, message: "Missing required authority profile fields." });
-        }
+        const lowerCaseEmail = email.toLowerCase();
+        const accountType = role.toLowerCase();
 
-        // 2. Check for existing email across the entire platform
-        const existingUser = await User.findOne({ "contact.email": email.toLowerCase() });
-        if (existingUser) {
-            return res.status(400).json({ success: false, message: "Email is already registered." });
+        // 2. Verify OTP session
+        const otpRecord = await OtpModel.findOne({ email: lowerCaseEmail });
+        if (!otpRecord || !otpRecord.isVerified) {
+            return res.status(400).json({ success: false, message: "Email is not verified via OTP." });
         }
 
-        // 3. Hash Password
-        const hashedPassword = await bcrypt.hash(password, 10);
+        // 3. Resolve Custom Department
+        const finalDepartment = departmentName === 'OTHER' ? otherDepartment : departmentName;
 
-        // 4. Generate a unique username for them based on department
-        const baseUserName = departmentName.toLowerCase().replace(/[^a-z0-9]/g, '') + "_" + Math.floor(1000 + Math.random() * 9000);
+        // 4. Generate Unique Username
+        const autoUserName = await generateUniqueUserName(lowerCaseEmail);
 
-        // 5. Create the Unverified Authority User
+        // 5. Format Expertise Tags
+        let formattedTags = [];
+        if (expertiseTags) {
+            formattedTags = Array.isArray(expertiseTags)
+                ? expertiseTags
+                : expertiseTags.split(',').map(tag => tag.trim());
+        }
+
+        // 6. Create the Unverified Authority
+        // Saved to a variable so we can use its ID for notifications
         const newAuthority = await User.create({
             name,
-            userName: baseUserName,
-            password: hashedPassword,
-            role: role,
+            userName: autoUserName,
+            role: accountType,
+            otherRole: accountType === 'other' ? otherRole : undefined,
             isProfileComplete: true,
-            isEmailVerified: true, // Assuming you verify email on frontend or trust it for now
-            contact: {
-                email: email.toLowerCase(),
-                country, state, city, pinCode
-            },
+            isEmailVerified: true,
+            contact: { email: lowerCaseEmail },
             authorityProfile: {
-                departmentName,
-                expertiseTags: expertiseTags || [],
+                organizationName: accountType === 'ngo' ? organizationName : undefined,
+                departmentName: finalDepartment.toUpperCase(),
                 assignedState,
                 assignedDistrict,
                 idProofUrl,
-                isVerified: false // Admin must change this to true later
+                expertiseTags: formattedTags,
+                verificationStatus: 'PENDING'
             }
         });
 
-        // 6. Return Success Response
-        res.status(201).json({
+        // 7. Cleanup OTP
+        await OtpModel.deleteOne({ email: lowerCaseEmail });
+
+        // ==========================================
+        // 8. NOTIFY ALL ADMINS
+        // ==========================================
+        try {
+            const admins = await User.find({ role: 'admin' });
+            const io = req.app.get('io');
+
+            for (const adminUser of admins) {
+                await triggerNotification({
+                    recipientId: adminUser._id,
+                    senderId: newAuthority._id,
+                    type: 'NEW_AUTHORITY_APPLICATION',
+                    message: `A new ${accountType.toUpperCase()} application has been submitted by ${name} and is awaiting verification.`,
+                    io: io
+                });
+            }
+        } catch (notifError) {
+            console.error("Failed to notify admins of new authority application:", notifError);
+            // Non-blocking: we intentionally don't throw here so the user still registers successfully
+        }
+        // ==========================================
+
+        // 9. Success Response
+        return res.status(201).json({
             success: true,
-            message: "Authority Registration submitted successfully. Please wait for Admin verification.",
-            authorityId: newAuthority._id
+            message: "Application submitted successfully! Our admins will review your documents shortly."
         });
 
     } catch (err) {
         console.error("Authority Registration Error:", err);
-        res.status(500).json({ success: false, message: "Server error during registration." });
+        return res.status(400).json({ success: false, message: err.message || "Server error during registration." });
     }
 });
 
