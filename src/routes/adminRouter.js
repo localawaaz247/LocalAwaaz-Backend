@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const s3 = require('../config/s3Client');
+const LeaderBoard = require('../models/LeaderBoard');
 
 const uploadEvidence = multer({
     dest: 'temp_uploads/',
@@ -479,17 +480,54 @@ adminRouter.get('/admin/user/:id', userAuth, adminAuth, async (req, res) => {
 
         // Fetch detailed categorized history for the frontend tabs
         const history = {};
-        history.REPORTED = await Issue.find({ reportedBy: id, isDeleted: false }).select('title location status createdAt');
-        history.CONFIRMED = await Issue.find({ 'confirmations.user': id, isDeleted: false }).select('title location status createdAt');
-        history.FLAGGED = await Issue.find({ 'flags.flaggedBy': id, isDeleted: false }).select('title location status createdAt');
+
+        // Note: Added 'category' to the select queries so the UI looks complete
+        history.REPORTED = await Issue.find({ reportedBy: id, isDeleted: false }).select('title location category status createdAt');
+        history.CONFIRMED = await Issue.find({ 'confirmations.user': id, isDeleted: false }).select('title location category status createdAt');
+        history.FLAGGED = await Issue.find({ 'flags.flaggedBy': id, isDeleted: false }).select('title location category status createdAt');
 
         if (['official', 'ngo'].includes(user.role)) {
             // If they are an authority, fetch their professional metrics
-            history.ASSIGNED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: { $in: ['LOCKED', 'IN_REVIEW'] }, isDeleted: false }).select('title location status createdAt');
-            history.COMPLETED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: 'RESOLVED', isDeleted: false }).select('title location status createdAt');
-            history.BIDS = await Issue.find({ 'bidding.bids.authorityId': id, isDeleted: false }).select('title location status createdAt');
-            history.RELEASED = await Issue.find({ 'auditLog': { $elemMatch: { action: 'JOB_RELEASED', performedBy: id } }, isDeleted: false }).select('title location status createdAt');
+            history.ASSIGNED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: { $in: ['LOCKED', 'IN_REVIEW', 'PENDING_EXTENSION', 'AWAITING_HANDOVER'] }, isDeleted: false }).select('title location category status createdAt');
+            history.COMPLETED = await Issue.find({ 'bidding.winningBid.authorityId': id, status: 'RESOLVED', isDeleted: false }).select('title location category status createdAt');
+            history.BIDS = await Issue.find({ 'bidding.bids.authorityId': id, isDeleted: false }).select('title location category status createdAt');
+            history.RELEASED = await Issue.find({ 'auditLog': { $elemMatch: { action: 'JOB_RELEASED', performedBy: id } }, isDeleted: false }).select('title location category status createdAt');
+
+            // 🟢 NEW: Fetch FAILED Jobs (Handover Submitted, Ghost Abandonment, or Force Unassigned)
+            history.FAILED = await Issue.find({
+                'auditLog': {
+                    $elemMatch: {
+                        action: { $in: ['HANDOVER_SUBMITTED', 'GHOST_ABANDONMENT', 'FORCE_UNASSIGNED'] },
+                        performedBy: id
+                    }
+                },
+                isDeleted: false
+            }).select('title location category status createdAt');
         }
+
+        // 🟢 NEW: Fetch Leaderboard Rankings History
+        // Find any leaderboard where this user appears in either array
+        const leaderboards = await LeaderBoard.find({
+            $or: [{ 'citizens.userId': id }, { 'authorities.userId': id }]
+        }).sort({ createdAt: -1 }); // Sort by newest first
+
+        const rankings = [];
+        leaderboards.forEach(board => {
+            // Determine which list to look in based on the user's role
+            const targetList = ['official', 'ngo'].includes(user.role) ? board.authorities : board.citizens;
+
+            // Find their specific entry
+            const userEntry = targetList.find(entry => entry.userId.toString() === id.toString());
+
+            if (userEntry) {
+                rankings.push({
+                    rank: userEntry.rank,
+                    type: board.type || 'WEEKLY',
+                    date: board.createdAt
+                });
+            }
+        });
+        history.RANKINGS = rankings;
 
         return res.status(200).json({
             success: true,

@@ -8,9 +8,15 @@ leaderRouter.get('/current', async (req, res) => {
     try {
         const currentBoard = await LeaderBoard.findOne({ type: 'WEEKLY' })
             .sort({ createdAt: -1 })
-            // Added issuesReported, issuesResolved, and issuesConfirmed (contribution)
-            .populate('citizens.userId', 'name profilePic rank badges issuesReported issuesResolved issuesConfirmed')
-            .populate('authorities.userId', 'name profilePic authorityProfile.designation authorityProfile.departmentName authorityProfile.org');
+            // 🟢 FIXED: Changed issuesConfirmed to issuesFlagged to match the User schema
+            .populate(
+                'citizens.userId',
+                'name profilePic rank badges issuesReported issuesResolved issuesFlagged civilScore accountStatus'
+            )
+            .populate(
+                'authorities.userId',
+                'name profilePic accountStatus badges authorityProfile.designation authorityProfile.departmentName authorityProfile.org authorityProfile.verificationStatus authorityProfile.activeJobsCount authorityProfile.jobsCompleted authorityProfile.jobsFailed authorityProfile.jobsReleased'
+            );
 
         if (!currentBoard) {
             return res.status(404).json({ success: false, message: "No leaderboard active yet." });
