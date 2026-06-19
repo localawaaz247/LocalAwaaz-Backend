@@ -10,134 +10,9 @@ const mongoose = require('mongoose')
 const bcrypt = require('bcrypt')
 const Notification = require('../models/Notification');
 const axios = require("axios");
+const stringSimilarity = require('string-similarity');
+const { State, City } = require('country-state-city');
 
-/**
- * ============================
- * COMPLETE USER PROFILE
- * ============================
- * Used mainly after:
- * - Google OAuth signup
- * - Incomplete profile registrations
- *
- * Requires authentication.
- */
-userRouter.patch("/me/profile-complete", userAuth, statusAuth, async (req, res) => {
-    try {
-        const {
-            userName,
-            gender,
-            // mobile,
-            country,
-            state,
-            city,
-            pinCode,
-            profilePic
-        } = req.body;
-
-        /**
-         * ---------------------------------
-         * VALIDATION SECTION
-         * ---------------------------------
-         * Only validates fields required to
-         * complete the profile.
-         */
-
-        // Username rules:
-        // - minimum length
-        // - must contain uppercase, lowercase & number
-        // - allows only _ and @ as special chars
-        const userNameRegex = /^[\x21-\x7E]{4,10}$/;
-
-        if (!userName || userName.length < 4) {
-            return res.status(400).json({
-                success: false,
-                message: "Username too short"
-            });
-        }
-
-        if (!userNameRegex.test(userName)) {
-            return res.status(400).json({
-                success: false,
-                message: "Username must be 4-10 characters and cannot contain spaces or emojis."
-            });
-        }
-
-        // Gender validation
-        if (!gender || !["male", "female", "other"].includes(gender)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid gender"
-            });
-        }
-
-        // Mobile number validation
-        // if (!mobile || !validate.isMobilePhone(mobile, 'any')) {
-        //     return res.status(400).json({
-        //         success: false,
-        //         message: "Enter valid Mobile Number"
-        //     });
-        // }
-
-        /**
-         * ---------------------------------
-         * USERNAME UNIQUENESS CHECK
-         * ---------------------------------
-         * Ensure no other user (except current)
-         * already has this username.
-         */
-        const existing = await User.findOne({
-            userName,
-            _id: { $ne: req.userId }
-        });
-
-        if (existing) {
-            return res.status(400).json({
-                message: "Username already taken"
-            });
-        }
-
-        /**
-         * ---------------------------------
-         * UPDATE USER PROFILE
-         * ---------------------------------
-         */
-        const user = await User.findById(req.userId);
-        if (!user) {
-            return res.status(404).json({
-                message: "User not found"
-            });
-        }
-
-        // Update missing / editable fields
-        user.userName = userName;
-        user.gender = gender;
-        // user.contact.mobile = mobile;
-        user.contact.country = country;
-        user.contact.state = state;
-        user.contact.city = city;
-        user.contact.pinCode = pinCode;
-
-        if (profilePic) {
-            user.profilePic = profilePic;
-        }
-        // Mark profile as completed
-        user.isProfileComplete = true;
-
-        await user.save();
-
-        res.status(200).json({
-            success: true,
-            message: "Profile completed successfully",
-            user
-        });
-
-    } catch (err) {
-        res.status(400).json({
-            success: false,
-            message: "Error in updating profile"
-        });
-    }
-});
 
 userRouter.get('/issues/feed', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
@@ -540,19 +415,24 @@ userRouter.get('/me/issues/confirmed', userAuth, statusAuth, profileAuth, async 
 });
 
 
+const validStatesList = State.getStatesOfCountry('IN').map(state => state.name);
+const validDistrictsList = City.getCitiesOfCountry('IN').map(city => city.name);
+
 userRouter.post('/get-location-from-coords', userAuth, statusAuth, async (req, res) => {
     try {
         const { lat, lng } = req.body;
+        const userId = req.userId;
 
         if (lat === undefined || lng === undefined) {
-            return res.status(400).json({
-                success: false,
-                message: "Latitude and Longitude required"
-            });
+            return res.status(400).json({ success: false, message: "Latitude and Longitude required" });
+        }
+
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ success: false, message: "User not found" });
         }
 
         const axios = require('axios');
-
         const response = await axios.get(
             `https://api.opencagedata.com/geocode/v1/json?q=${lat}+${lng}&key=${process.env.OPENCAGE_API_KEY}`
         );
@@ -560,27 +440,53 @@ userRouter.post('/get-location-from-coords', userAuth, statusAuth, async (req, r
         const components = response.data.results[0]?.components;
 
         if (!components) {
-            return res.status(404).json({
-                success: false,
-                message: "Location not found"
-            });
+            return res.status(404).json({ success: false, message: "Location not found" });
         }
+
+        let detectedCity = components.city || components.town || components.village || components.state_district || components.county;
+        let detectedState = components.state;
+
+        // --- FUZZY MATCHING LOGIC ---
+
+        if (detectedState && validStatesList.length > 0) {
+            const stateMatch = stringSimilarity.findBestMatch(detectedState, validStatesList);
+            if (stateMatch.bestMatch.rating > 0.6) {
+                detectedState = stateMatch.bestMatch.target;
+            }
+        }
+
+        if (detectedCity && validDistrictsList.length > 0) {
+            const districtMatch = stringSimilarity.findBestMatch(detectedCity, validDistrictsList);
+            // Lowered threshold slightly to 0.4 because OpenCage and cscAPI sometimes have wider naming gaps
+            if (districtMatch.bestMatch.rating > 0.4) {
+                detectedCity = districtMatch.bestMatch.target;
+            }
+        }
+
+        // --- ALWAYS SAVE LOGIC ---
+        if (!user.contact) {
+            user.contact = {};
+        }
+
+        // Safely update just the state and city inside the contact object
+        user.contact.state = detectedState || null;
+        user.contact.city = detectedCity || null;
+        // Optionally update country if you want: user.contact.country = components.country;
+
+        await user.save();
 
         return res.status(200).json({
             success: true,
             data: {
-                city: components.city || components.town || components.village,
-                state: components.state,
+                city: detectedCity,
+                state: detectedState,
                 country: components.country
             }
         });
 
     } catch (err) {
         console.log("Reverse Geocoding Error:", err);
-        return res.status(500).json({
-            success: false,
-            message: "Failed to fetch location"
-        });
+        return res.status(500).json({ success: false, message: "Failed to fetch location" });
     }
 });
 
