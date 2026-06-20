@@ -25,6 +25,7 @@ const triggerNotification = require('../utils/notificationService');
 const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const { checkAndAssignRank } = require('../utils/gamification');
 const { S3Client } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const s3 = new S3Client({
     region: "auto",
@@ -814,6 +815,167 @@ issueRouter.get('/issue/global/resolved-count', async (req, res) => {
     }
 });
 
+
+// =========================================================================
+// 1. GET PRE-SIGNED URL FOR COUNTER-PROOF (Zero Server Storage)
+// =========================================================================
+issueRouter.get('/issue/:id/verify/presign', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const userId = req.userId.toString();
+
+        const issue = await Issue.findById(id);
+        if (!issue || issue.status !== 'RESOLVED' || !issue.workCycle.escrow.isEscrowActive) {
+            return res.status(400).json({ success: false, message: "Issue is not in a valid state." });
+        }
+
+        // Validate Eligibility
+        const isReporter = issue.reportedBy.toString() === userId;
+        const isConfirmer = issue.confirmations.some(c => c.user.toString() === userId);
+
+        if (!isReporter && !isConfirmer) {
+            return res.status(403).json({ success: false, message: "Unauthorized to vote." });
+        }
+
+        // Generate a secure, unique path in your R2 bucket
+        const uniqueKey = `counter-proofs/${id}/${userId}-${crypto.randomUUID()}.jpg`;
+
+        // Create the permission command
+        const command = new PutObjectCommand({
+            Bucket: process.env.R2_BUCKET_NAME,
+            Key: uniqueKey,
+            ContentType: "image/jpeg" // Force images only
+        });
+
+        // Generate a URL that expires in 5 minutes
+        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueKey}`;
+
+        return res.status(200).json({
+            success: true,
+            uploadUrl,
+            publicUrl
+        });
+
+    } catch (err) {
+        console.error("Presign Error:", err);
+        return res.status(500).json({ success: false, message: "Failed to generate secure upload link." });
+    }
+});
+
+
+// =========================================================================
+// 2. POST CITIZEN VERIFICATION (The Consensus Engine)
+// =========================================================================
+// Finalized with Geofencing and Weighted Consensus
+issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { verdict, proofUrl, userLat, userLng } = req.body;
+        const userId = req.userId.toString();
+
+        if (!['APPROVED', 'OPPOSED'].includes(verdict)) {
+            return res.status(400).json({ success: false, message: "Verdict must be APPROVED or OPPOSED." });
+        }
+
+        // 1. NATIVE GEOFENCING CHECK
+        // We find the issue ONLY if it's in a valid state AND the user is within 500m
+        const issue = await Issue.findOne({
+            _id: id,
+            status: 'RESOLVED',
+            'workCycle.escrow.isEscrowActive': true,
+            'location.geoData': {
+                $near: {
+                    $geometry: { type: "Point", coordinates: [parseFloat(userLng), parseFloat(userLat)] },
+                    $maxDistance: 500 // Strictly 500 meters
+                }
+            }
+        });
+
+        if (!issue) {
+            return res.status(403).json({
+                success: false,
+                message: "Issue not found or you are outside the 500m verification range."
+            });
+        }
+
+        // 2. ELIGIBILITY CHECK
+        const isReporter = issue.reportedBy.toString() === userId;
+        const confirmerIndex = issue.confirmations.findIndex(c => c.user.toString() === userId);
+        const isConfirmer = confirmerIndex !== -1;
+
+        if (!isReporter && !isConfirmer) {
+            return res.status(403).json({ success: false, message: "Only reporter or confirmers can vote." });
+        }
+
+        // 3. ENFORCE PROOF FOR OPPOSITION
+        if (verdict === 'OPPOSED' && !proofUrl) {
+            return res.status(400).json({ success: false, message: "Live photo counter-proof is required." });
+        }
+
+        // 4. LOG THE VOTE
+        if (isReporter) {
+            if (issue.reportedByVerdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
+            issue.reportedByVerdict = verdict;
+            if (verdict === 'OPPOSED') {
+                issue.reportedByVerdictMedia = proofUrl;
+                // 🟢 Push the counter-proof into the main media carousel
+                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
+            }
+        } else {
+            if (issue.confirmations[confirmerIndex].verdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
+            issue.confirmations[confirmerIndex].verdict = verdict;
+            if (verdict === 'OPPOSED') {
+                issue.confirmations[confirmerIndex].verdictMedia = proofUrl;
+                // 🟢 Push the counter-proof into the main media carousel
+                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
+            }
+        }
+
+        // How the weightage of voting calc.
+
+        // 5. WEIGHTED QUORUM MATH (Reporter = 3x weight, Confirmers = 1x weight)
+        const REPORTER_WEIGHT = 3;
+        const totalConfirmers = issue.confirmations.length;
+        const totalVotingPower = REPORTER_WEIGHT + totalConfirmers;
+
+        let currentOpposePower = 0;
+        if (issue.reportedByVerdict === 'OPPOSED') currentOpposePower += REPORTER_WEIGHT;
+        currentOpposePower += issue.confirmations.filter(c => c.verdict === 'OPPOSED').length;
+
+        const oppositionRatio = currentOpposePower / totalVotingPower;
+
+        // 6. TRIGGER DISPUTE (> 40% Opposition)
+        if (oppositionRatio > 0.40) {
+            issue.status = 'DISPUTED';
+            issue.workCycle.escrow.isEscrowActive = false; // FREEZE FUNDS
+            issue.workCycle.finalVerdict = 'OPPOSED';
+
+            issue.statusHistory.push({ status: 'DISPUTED', changedBy: userId, remark: 'Community Consensus rejected the fix.' });
+            issue.auditLog.push({ action: 'ESCROW_FROZEN', performedBy: userId, details: `Opposition hit ${(oppositionRatio * 100).toFixed(1)}%.` });
+
+            // Notify Official
+            const io = req.app.get('io');
+            if (io && issue.bidding?.winningBid?.authorityId) {
+                triggerNotification({
+                    recipientId: issue.bidding.winningBid.authorityId,
+                    senderId: userId,
+                    issueId: issue._id,
+                    type: 'URGENT',
+                    message: `🚨 Fix for "${issue.title}" was rejected by the community. Reward frozen.`,
+                    io
+                }).catch(e => console.error(e));
+            }
+        }
+
+        await issue.save();
+        return res.status(200).json({ success: true, message: "Vote logged.", oppositionRatio: `${(oppositionRatio * 100).toFixed(1)}%` });
+
+    } catch (err) {
+        console.error("Verification Vote Error:", err);
+        return res.status(500).json({ success: false, message: "Server error logging vote." });
+    }
+});
 
 
 module.exports = issueRouter;

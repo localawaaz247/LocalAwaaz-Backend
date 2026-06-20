@@ -76,9 +76,21 @@ const issueModel = new mongoose.Schema({
     confirmations: [
         {
             user: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-            confirmedAt: { type: Date, default: Date.now }
+            confirmedAt: { type: Date, default: Date.now },
+            // NEW: Tracking their verification vote & counter-proof photo
+            verdict: { type: String, enum: ['PENDING', 'APPROVED', 'OPPOSED'], default: 'PENDING' },
+            verdictMedia: { type: String, default: null }
         }
     ],
+    reportedByVerdict: {
+        type: String,
+        enum: ['PENDING', 'APPROVED', 'OPPOSED'],
+        default: 'PENDING'
+    },
+    reportedByVerdictMedia: {
+        type: String,
+        default: null
+    },
     status: {
         type: String,
         enum: ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
@@ -164,7 +176,7 @@ const issueModel = new mongoose.Schema({
             hoursRequested: { type: Number, required: true }, // Normalized
             reason: { type: String, required: true },
             requestedAt: { type: Date, default: Date.now },
-            status: { type: String, enum: ['PENDING', 'APPROVED', 'DENIED'], default: 'PENDING' },
+            status: { type: String, enum: ['PENDING', 'APPROVED', 'REJECTED'], default: 'PENDING' },
             adminRemark: { type: String }
         }],
 

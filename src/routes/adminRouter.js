@@ -17,6 +17,7 @@ const path = require('path');
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const s3 = require('../config/s3Client');
 const LeaderBoard = require('../models/LeaderBoard');
+const { calculateCsiReward } = require('../utils/csiCalculator');
 
 const uploadEvidence = multer({
     dest: 'temp_uploads/',
@@ -115,7 +116,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
         const io = req.app.get('io');
         const file = req.file;
 
-        // Clone the body so we can safely manipulate it
         const updateData = { ...req.body };
 
         if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -123,7 +123,12 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             return res.status(400).json({ success: false, message: "Invalid Issue ID" });
         }
 
-        // 1. Protect immutable fields from accidental overwrites
+        const currentIssue = await Issue.findById(id);
+        if (!currentIssue) {
+            if (file && fs.existsSync(file.path)) fs.unlinkSync(file.path);
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
         delete updateData._id;
         delete updateData.reportedBy;
 
@@ -133,7 +138,10 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
         let pushQuery = {};
         let r2PublicUrl = null;
 
-        // 2. Process File Upload to Cloudflare R2 if attached
+        if (updateData.status && updateData.status.toUpperCase() === 'RESOLVED' && !file) {
+            return res.status(400).json({ success: false, message: "Resolution evidence (image or video) is strictly required." });
+        }
+
         if (file) {
             try {
                 console.log(`🚀 Starting Direct R2 Upload for Evidence...`);
@@ -151,7 +159,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                 r2PublicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
                 console.log(`✅ Evidence Uploaded: ${uniqueFileName}`);
 
-                // Clean up local temp file immediately after successful R2 upload
                 if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
             } catch (uploadError) {
                 console.error("🔥 Cloudflare R2 Upload Error:", uploadError);
@@ -160,11 +167,11 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             }
         }
 
-        // 3. Check if the status is part of the update request
         if (updateData.status) {
             newStatus = updateData.status.toUpperCase();
 
-            const validStatus = ['OPEN', 'IN_REVIEW', 'RESOLVED', 'REJECTED', 'DISPUTED', 'ORPHANED'];
+            // 🟢 UPDATED: Now allows ALL 9 system statuses
+            const validStatus = ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"];
 
             if (!validStatus.includes(newStatus)) {
                 return res.status(400).json({
@@ -173,11 +180,9 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                 });
             }
 
-            // Lock in the validated status
             updateData.status = newStatus;
             isStatusUpdated = true;
 
-            // Prepare the history log
             pushQuery = {
                 statusHistory: {
                     status: newStatus,
@@ -188,12 +193,12 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             };
         }
 
-        // 4. Build the Mongoose update object dynamically
         const mongooseUpdate = { $set: updateData };
+        let pendingEscrowReward = null;
+
         if (isStatusUpdated) {
             mongooseUpdate.$push = pushQuery;
 
-            // 🟢 Handle Dispute Evidence
             if (newStatus === 'DISPUTED') {
                 mongooseUpdate.$set.disputeEvidence = {
                     mediaUrl: r2PublicUrl || null,
@@ -202,37 +207,54 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                 };
             }
 
-            // 🟢 Handle Resolution Evidence (NEW: Includes resolvedByAuthority)
             if (newStatus === 'RESOLVED') {
+                const targetAuthorityId = updateData.resolvedByAuthority || currentIssue.bidding?.winningBid?.authorityId;
+
                 mongooseUpdate.$set.resolutionEvidence = {
-                    mediaUrl: r2PublicUrl || null,
+                    mediaUrl: r2PublicUrl,
                     adminRemark: officialRemark,
                     resolvedAt: Date.now(),
-                    resolvedByAuthority: updateData.resolvedByAuthority || null
+                    resolvedByAuthority: targetAuthorityId || null
                 };
 
-                // Store explicitly on the root level if you need it for direct querying later
-                if (updateData.resolvedByAuthority) {
-                    mongooseUpdate.$set.resolvedByAuthority = updateData.resolvedByAuthority;
+                if (targetAuthorityId) {
+                    const escrowPoints = calculateCsiReward(currentIssue.impactScore);
+
+                    mongooseUpdate.$set['workCycle.escrow'] = {
+                        isEscrowActive: true,
+                        pointsHolding: escrowPoints,
+                        citizenVerdict: 'PENDING',
+                        autoReleaseAt: new Date(Date.now() + 72 * 60 * 60 * 1000)
+                    };
+                    mongooseUpdate.$set['workCycle.isClockPaused'] = true;
+
+                    pendingEscrowReward = { authorityId: targetAuthorityId, points: escrowPoints };
+
+                    pushQuery.auditLog = {
+                        action: 'RESOLVED_AWAITING_ESCROW',
+                        performedBy: userId,
+                        details: `Admin forced resolution. ${escrowPoints} points locked in Escrow for Official.`
+                    };
                 }
 
-                // Push the uploaded evidence to the main media array so it shows up in the UI carousel
                 if (r2PublicUrl) {
                     mongooseUpdate.$push.media = {
                         url: r2PublicUrl,
                         type: file.mimetype.startsWith('video') ? 'video' : 'image'
                     };
                 }
+
+                if (updateData.resolvedByAuthority) {
+                    mongooseUpdate.$set.resolvedByAuthority = updateData.resolvedByAuthority;
+                }
             }
 
-            // 🟢 Wipe the assigned official if marked as ORPHANED
             if (newStatus === 'ORPHANED') {
                 mongooseUpdate.$set['bidding.winningBid'] = null;
                 mongooseUpdate.$set['workCycle.commitmentDeadline'] = null;
             }
         }
 
-        // 5. Execute the update
         const updatedIssue = await Issue.findByIdAndUpdate(
             id,
             mongooseUpdate,
@@ -243,32 +265,35 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
-        // 6. Trigger Notification Engine ONLY if status changed
+        if (pendingEscrowReward) {
+            await User.findByIdAndUpdate(pendingEscrowReward.authorityId, {
+                $inc: {
+                    'authorityProfile.csiInEscrow': pendingEscrowReward.points,
+                    'authorityProfile.activeJobsCount': -1,
+                    'authorityProfile.jobsCompleted': 1
+                }
+            });
+        }
+
         if (isStatusUpdated) {
             try {
                 let notificationType = null;
                 if (newStatus === 'RESOLVED') notificationType = 'ISSUE_RESOLVED';
-                if (newStatus === 'IN_REVIEW') notificationType = 'ISSUE_IN_REVIEW';
-                if (newStatus === 'REJECTED') notificationType = 'ISSUE_REJECTED';
+                if (['IN_REVIEW', 'PENDING_EXTENSION'].includes(newStatus)) notificationType = 'ISSUE_IN_REVIEW';
+                if (['REJECTED', 'FAILED'].includes(newStatus)) notificationType = 'ISSUE_REJECTED';
                 if (newStatus === 'LOCKED') notificationType = 'ISSUE_LOCKED';
                 if (newStatus === 'DISPUTED') notificationType = 'ISSUE_DISPUTED';
-                if (newStatus === 'ORPHANED') notificationType = 'ISSUE_ORPHANED';
+                if (['ORPHANED', 'RELEASED'].includes(newStatus)) notificationType = 'ISSUE_ORPHANED';
 
                 if (notificationType) {
-                    // Gather all unique users involved to prevent duplicate pings
                     const recipients = new Set();
-
                     if (updatedIssue.reportedBy) recipients.add(updatedIssue.reportedBy.toString());
-
                     if (updatedIssue.confirmations && updatedIssue.confirmations.length > 0) {
                         updatedIssue.confirmations.forEach(c => recipients.add(c.user.toString()));
                     }
-
                     if (updatedIssue.bidding && updatedIssue.bidding.bids && updatedIssue.bidding.bids.length > 0) {
                         updatedIssue.bidding.bids.forEach(b => recipients.add(b.authorityId.toString()));
                     }
-
-                    // Also ping the authority marked as resolving it (if they weren't in the bid list)
                     if (updateData.resolvedByAuthority) {
                         recipients.add(updateData.resolvedByAuthority);
                     }
@@ -277,7 +302,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                         ? `Admin Update (${newStatus}): "${officialRemark}" on an issue you interact with.`
                         : `The status of an issue you interact with has been updated to ${newStatus}.`;
 
-                    // Fire to everyone!
                     Array.from(recipients).forEach(targetUserId => {
                         triggerNotification({
                             recipientId: targetUserId,
@@ -294,7 +318,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             }
         }
 
-        // 7. Return success to the admin dashboard
         return res.status(200).json({
             success: true,
             message: isStatusUpdated ? `Issue status updated to ${newStatus}` : "Issue updated successfully",
@@ -1841,6 +1864,69 @@ adminRouter.get('/admin/export/triage', userAuth, adminAuth, async (req, res) =>
     } catch (err) {
         console.error("Export triage error:", err);
         res.status(500).send('Error generating Excel file');
+    }
+});
+
+// 🟢 NEW: Dedicated Extension Handler Route
+adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { action, adminRemark } = req.body; // 'APPROVED' or 'REJECTED'
+
+        const issue = await Issue.findById(id);
+
+        if (!issue || issue.status !== 'PENDING_EXTENSION') {
+            return res.status(400).json({ success: false, message: "Issue is not pending an extension" });
+        }
+
+        const pendingRequest = issue.workCycle.extensionRequests.slice(-1)[0];
+        if (!pendingRequest || pendingRequest.status !== 'PENDING') {
+            return res.status(400).json({ success: false, message: "No pending extension request found" });
+        }
+
+        // Calculate time paused to not penalize them for the admin's delay in responding
+        const now = new Date();
+        const pausedDurationMs = issue.workCycle.pausedAt ? (now.getTime() - issue.workCycle.pausedAt.getTime()) : 0;
+
+        pendingRequest.status = action;
+        pendingRequest.adminRemark = adminRemark || '';
+
+        issue.status = 'LOCKED';
+        issue.workCycle.isClockPaused = false;
+
+        if (action === 'APPROVED') {
+            const extraTimeMs = pendingRequest.hoursRequested * 60 * 60 * 1000;
+            issue.workCycle.commitmentDeadline = new Date(issue.workCycle.commitmentDeadline.getTime() + extraTimeMs + pausedDurationMs);
+            issue.statusHistory.push({ status: 'LOCKED', changedBy: req.userId, remark: `Extension Approved: +${pendingRequest.hoursRequested}h. ${adminRemark || ''}` });
+            issue.auditLog.push({ action: 'EXTENSION_APPROVED', performedBy: req.userId, details: `Granted ${pendingRequest.hoursRequested}h. Clock resumed.` });
+        } else {
+            // Just resume clock, add the paused time so they don't lose time
+            issue.workCycle.commitmentDeadline = new Date(issue.workCycle.commitmentDeadline.getTime() + pausedDurationMs);
+            issue.statusHistory.push({ status: 'LOCKED', changedBy: req.userId, remark: `Extension Rejected. ${adminRemark || ''}` });
+            issue.auditLog.push({ action: 'EXTENSION_REJECTED', performedBy: req.userId, details: `Denied ${pendingRequest.hoursRequested}h request. Clock resumed.` });
+        }
+
+        issue.workCycle.pausedAt = null;
+
+        await issue.save();
+
+        // Notify official
+        if (issue.bidding?.winningBid?.authorityId) {
+            triggerNotification({
+                recipientId: issue.bidding.winningBid.authorityId,
+                senderId: req.userId,
+                issueId: issue._id,
+                type: 'URGENT',
+                message: `Your extension request for "${issue.title}" was ${action}.`,
+                io: req.app.get('io')
+            }).catch(e => console.error(e));
+        }
+
+        return res.status(200).json({ success: true, message: `Extension ${action.toLowerCase()} successfully`, data: issue });
+
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({ success: false, message: "Failed to process extension" });
     }
 });
 
