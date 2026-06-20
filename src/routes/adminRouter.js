@@ -108,7 +108,6 @@ adminRouter.get('/admin/issues', userAuth, adminAuth, async (req, res) => {
     }
 });
 
-// Update the issue (Now with Cloudflare R2 Uploads for Dispute Evidence)
 adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single('media'), async (req, res) => {
     try {
         const { id } = req.params;
@@ -136,6 +135,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
         let newStatus = null;
         let officialRemark = updateData.adminRemark || "";
         let pushQuery = {};
+        const auditLogsToPush = []; // Array to handle multiple audit logs safely
         let r2PublicUrl = null;
 
         if (updateData.status && updateData.status.toUpperCase() === 'RESOLVED' && !file) {
@@ -169,36 +169,60 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
 
         if (updateData.status) {
             newStatus = updateData.status.toUpperCase();
-
-            // 🟢 UPDATED: Now allows ALL 9 system statuses
             const validStatus = ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"];
 
             if (!validStatus.includes(newStatus)) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Invalid status. Allowed values: ${validStatus.join(', ')}`
-                });
+                return res.status(400).json({ success: false, message: `Invalid status. Allowed values: ${validStatus.join(', ')}` });
             }
 
             updateData.status = newStatus;
             isStatusUpdated = true;
 
-            pushQuery = {
-                statusHistory: {
-                    status: newStatus,
-                    changedBy: userId,
-                    changedAt: Date.now(),
-                    remark: officialRemark || 'Status updated by Admin'
-                }
+            pushQuery.statusHistory = {
+                status: newStatus,
+                changedBy: userId,
+                changedAt: Date.now(),
+                remark: officialRemark || 'Status updated by Admin'
             };
         }
 
         const mongooseUpdate = { $set: updateData };
         let pendingEscrowReward = null;
 
-        if (isStatusUpdated) {
-            mongooseUpdate.$push = pushQuery;
+        // 🟢 THE FIX: UNIVERSAL AUTHORITY SYNC
+        // If the admin picked someone from the dropdown, force them into the issue's ownership immediately.
+        if (updateData.resolvedByAuthority) {
+            const targetAuthId = updateData.resolvedByAuthority;
 
+            // To avoid MongoDB "PathNotViable" errors when winningBid is null, 
+            // we must overwrite the entire object instead of using dot-notation inside it.
+            const existingTime = currentIssue.bidding?.winningBid?.commitmentTimeHours || 24;
+            const existingAcceptedAt = currentIssue.bidding?.winningBid?.acceptedAt || Date.now();
+
+            mongooseUpdate.$set['bidding.winningBid'] = {
+                authorityId: targetAuthId,
+                commitmentTimeHours: existingTime,
+                acceptedAt: existingAcceptedAt
+            };
+
+            // 2. Initialize default deadline if it was missing to prevent UI crashes
+            if (!currentIssue.workCycle?.commitmentDeadline) {
+                mongooseUpdate.$set['workCycle.commitmentDeadline'] = new Date(Date.now() + (24 * 60 * 60 * 1000));
+            }
+
+            // 3. Inject a targeted audit log to sync perfectly with the Frontend Career Queries
+            let actionLabel = 'ADMIN_ATTRIBUTED_ACTION';
+            if (newStatus === 'FAILED') actionLabel = 'FORCE_UNASSIGNED'; // Triggers the FAILED career tab
+            if (newStatus === 'RELEASED') actionLabel = 'JOB_RELEASED';   // Triggers the RELEASED career tab
+
+            auditLogsToPush.push({
+                action: actionLabel,
+                performedBy: targetAuthId, // Attribute this explicitly to the official, NOT the admin
+                details: `Admin explicitly attributed the ${newStatus || currentIssue.status} status to this official.`
+            });
+        }
+
+        if (isStatusUpdated) {
             if (newStatus === 'DISPUTED') {
                 mongooseUpdate.$set.disputeEvidence = {
                     mediaUrl: r2PublicUrl || null,
@@ -230,14 +254,15 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
 
                     pendingEscrowReward = { authorityId: targetAuthorityId, points: escrowPoints };
 
-                    pushQuery.auditLog = {
+                    auditLogsToPush.push({
                         action: 'RESOLVED_AWAITING_ESCROW',
                         performedBy: userId,
                         details: `Admin forced resolution. ${escrowPoints} points locked in Escrow for Official.`
-                    };
+                    });
                 }
 
                 if (r2PublicUrl) {
+                    if (!mongooseUpdate.$push) mongooseUpdate.$push = {};
                     mongooseUpdate.$push.media = {
                         url: r2PublicUrl,
                         type: file.mimetype.startsWith('video') ? 'video' : 'image'
@@ -255,6 +280,17 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             }
         }
 
+        // Apply our safely buffered audit logs
+        if (auditLogsToPush.length > 0) {
+            pushQuery.auditLog = { $each: auditLogsToPush };
+        }
+
+        if (Object.keys(pushQuery).length > 0) {
+            if (!mongooseUpdate.$push) mongooseUpdate.$push = {};
+            Object.assign(mongooseUpdate.$push, pushQuery);
+        }
+
+        // Execute the Database Update
         const updatedIssue = await Issue.findByIdAndUpdate(
             id,
             mongooseUpdate,
@@ -265,6 +301,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
+        // Escrow handling
         if (pendingEscrowReward) {
             await User.findByIdAndUpdate(pendingEscrowReward.authorityId, {
                 $inc: {
@@ -275,6 +312,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             });
         }
 
+        // Push Notifications
         if (isStatusUpdated) {
             try {
                 let notificationType = null;
@@ -342,7 +380,12 @@ adminRouter.get('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Issue id" });
         }
-        const issue = await Issue.findById(id);
+
+        // 🟢 FIX: Ensure BOTH fields are populated correctly
+        const issue = await Issue.findById(id)
+            .populate('reportedBy', 'name userName email')
+            .populate('bidding.winningBid.authorityId', 'name userName role authorityProfile');
+
         if (!issue) {
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
@@ -350,18 +393,13 @@ adminRouter.get('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
             success: true,
             message: "Issue found for admin",
             data: issue
-        })
+        });
     }
     catch (err) {
         console.log('Server Error: Cannot get the issue for admin', err);
-        return res.status(500).json(
-            {
-                success: false,
-                message: "Server Error: Cannot get the issue for admin"
-            }
-        )
+        return res.status(500).json({ success: false, message: "Server Error: Cannot get the issue for admin" });
     }
-})
+});
 
 // Delete an issue
 adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => {
@@ -1871,58 +1909,81 @@ adminRouter.get('/admin/export/triage', userAuth, adminAuth, async (req, res) =>
 adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req, res) => {
     try {
         const { id } = req.params;
-        const { action, adminRemark } = req.body; // 'APPROVED' or 'REJECTED'
+        const { action, adminRemark, timeValue, timeUnit } = req.body;
 
         const issue = await Issue.findById(id);
-
         if (!issue || issue.status !== 'PENDING_EXTENSION') {
             return res.status(400).json({ success: false, message: "Issue is not pending an extension" });
         }
 
-        const pendingRequest = issue.workCycle.extensionRequests.slice(-1)[0];
-        if (!pendingRequest || pendingRequest.status !== 'PENDING') {
+        // Find the index of the pending request
+        const requestIndex = issue.workCycle.extensionRequests.findIndex(r => r.status === 'PENDING');
+        if (requestIndex === -1) {
             return res.status(400).json({ success: false, message: "No pending extension request found" });
         }
 
-        // Calculate time paused to not penalize them for the admin's delay in responding
+        // 🟢 If Admin is approving, use the provided timeValue/timeUnit. 
+        // If Admin is rejecting, use the values that were already in the request or default to 0.
+        const finalTimeValue = timeValue || issue.workCycle.extensionRequests[requestIndex].requestedTimeValue;
+        const finalTimeUnit = timeUnit || issue.workCycle.extensionRequests[requestIndex].requestedTimeUnit;
+
+        // Calculate hours for the calculation logic
+        const multipliers = { 'HOURS': 1, 'DAYS': 24, 'WEEKS': 168, 'MONTHS': 720 };
+        const totalHours = finalTimeValue * (multipliers[finalTimeUnit] || 1);
+
         const now = new Date();
         const pausedDurationMs = issue.workCycle.pausedAt ? (now.getTime() - issue.workCycle.pausedAt.getTime()) : 0;
 
-        pendingRequest.status = action;
-        pendingRequest.adminRemark = adminRemark || '';
+        // Prepare the atomic update
+        const update = {
+            $set: {
+                status: 'LOCKED',
+                'workCycle.isClockPaused': false,
+                'workCycle.pausedAt': null,
+                [`workCycle.extensionRequests.${requestIndex}.status`]: action,
+                [`workCycle.extensionRequests.${requestIndex}.adminRemark`]: adminRemark || '',
+                // 🟢 Save the original input values so they aren't lost
+                [`workCycle.extensionRequests.${requestIndex}.requestedTimeValue`]: Number(finalTimeValue),
+                [`workCycle.extensionRequests.${requestIndex}.requestedTimeUnit`]: finalTimeUnit,
+                [`workCycle.extensionRequests.${requestIndex}.hoursRequested`]: totalHours
+            },
+            $push: {
+                statusHistory: {
+                    status: 'LOCKED',
+                    changedBy: req.userId,
+                    remark: `Extension ${action}: ${finalTimeValue} ${finalTimeUnit}. ${adminRemark || ''}`
+                },
+                auditLog: {
+                    action: action === 'APPROVED' ? 'EXTENSION_APPROVED' : 'EXTENSION_REJECTED',
+                    performedBy: req.userId,
+                    details: `Admin ${action.toLowerCase()} extension of ${totalHours} hours.`
+                }
+            }
+        };
 
-        issue.status = 'LOCKED';
-        issue.workCycle.isClockPaused = false;
-
+        // Update deadline
         if (action === 'APPROVED') {
-            const extraTimeMs = pendingRequest.hoursRequested * 60 * 60 * 1000;
-            issue.workCycle.commitmentDeadline = new Date(issue.workCycle.commitmentDeadline.getTime() + extraTimeMs + pausedDurationMs);
-            issue.statusHistory.push({ status: 'LOCKED', changedBy: req.userId, remark: `Extension Approved: +${pendingRequest.hoursRequested}h. ${adminRemark || ''}` });
-            issue.auditLog.push({ action: 'EXTENSION_APPROVED', performedBy: req.userId, details: `Granted ${pendingRequest.hoursRequested}h. Clock resumed.` });
+            const extraTimeMs = totalHours * 60 * 60 * 1000;
+            update.$set['workCycle.commitmentDeadline'] = new Date(issue.workCycle.commitmentDeadline.getTime() + extraTimeMs + pausedDurationMs);
         } else {
-            // Just resume clock, add the paused time so they don't lose time
-            issue.workCycle.commitmentDeadline = new Date(issue.workCycle.commitmentDeadline.getTime() + pausedDurationMs);
-            issue.statusHistory.push({ status: 'LOCKED', changedBy: req.userId, remark: `Extension Rejected. ${adminRemark || ''}` });
-            issue.auditLog.push({ action: 'EXTENSION_REJECTED', performedBy: req.userId, details: `Denied ${pendingRequest.hoursRequested}h request. Clock resumed.` });
+            update.$set['workCycle.commitmentDeadline'] = new Date(issue.workCycle.commitmentDeadline.getTime() + pausedDurationMs);
         }
 
-        issue.workCycle.pausedAt = null;
-
-        await issue.save();
+        const updatedIssue = await Issue.findByIdAndUpdate(id, update, { new: true });
 
         // Notify official
-        if (issue.bidding?.winningBid?.authorityId) {
+        if (updatedIssue.bidding?.winningBid?.authorityId) {
             triggerNotification({
-                recipientId: issue.bidding.winningBid.authorityId,
+                recipientId: updatedIssue.bidding.winningBid.authorityId,
                 senderId: req.userId,
-                issueId: issue._id,
+                issueId: updatedIssue._id,
                 type: 'URGENT',
-                message: `Your extension request for "${issue.title}" was ${action}.`,
+                message: `Your extension request for "${updatedIssue.title}" was ${action}.`,
                 io: req.app.get('io')
             }).catch(e => console.error(e));
         }
 
-        return res.status(200).json({ success: true, message: `Extension ${action.toLowerCase()} successfully`, data: issue });
+        return res.status(200).json({ success: true, message: `Extension ${action.toLowerCase()} successfully`, data: updatedIssue });
 
     } catch (err) {
         console.error(err);

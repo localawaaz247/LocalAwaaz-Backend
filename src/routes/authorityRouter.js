@@ -595,7 +595,8 @@ authorityRouter.post('/authority/issues/:issueId/handover', userAuth, authorityA
 
 authorityRouter.post('/authority/issues/:issueId/extend', userAuth, authorityAuth, async (req, res) => {
     try {
-        const { extensionDate, reason } = req.body;
+        // 🟢 FIX: Accept the raw inputs from the authority's UI
+        const { requestedTimeValue, requestedTimeUnit, reason } = req.body;
         const authorityId = req.authorityUser._id;
         const issueId = req.params.issueId;
 
@@ -608,30 +609,29 @@ authorityRouter.post('/authority/issues/:issueId/extend', userAuth, authorityAut
             return res.status(403).json({ success: false, message: "Unauthorized." });
         }
 
-        if (!extensionDate || !reason) {
-            return res.status(400).json({ success: false, message: "New date and reason are required." });
+        if (!requestedTimeValue || !requestedTimeUnit || !reason) {
+            return res.status(400).json({ success: false, message: "Time value, unit, and reason are required." });
         }
 
-        const requestedTime = new Date(extensionDate);
-        if (requestedTime <= issue.workCycle.commitmentDeadline) {
-            return res.status(400).json({ success: false, message: "New deadline must be in the future." });
-        }
-
-        const hoursRequested = Math.ceil((requestedTime.getTime() - issue.workCycle.commitmentDeadline.getTime()) / (1000 * 60 * 60));
+        // 🟢 Calculate normalized hours for the system deadline
+        let hoursRequested = Number(requestedTimeValue);
+        const multipliers = { 'HOURS': 1, 'DAYS': 24, 'WEEKS': 168, 'MONTHS': 720 };
+        hoursRequested *= (multipliers[requestedTimeUnit.toUpperCase()] || 1);
 
         issue.status = 'PENDING_EXTENSION';
         issue.workCycle.isClockPaused = true;
         issue.workCycle.pausedAt = new Date();
 
+        // 🟢 FIX: Save the raw values so the Admin UI can display them correctly later
         issue.workCycle.extensionRequests.push({
-            requestedTimeValue: hoursRequested,
-            requestedTimeUnit: 'HOURS',
+            requestedTimeValue: Number(requestedTimeValue),
+            requestedTimeUnit: requestedTimeUnit.toUpperCase(),
             hoursRequested: hoursRequested,
             reason: reason,
             status: 'PENDING'
         });
 
-        issue.statusHistory.push({ status: 'PENDING_EXTENSION', changedBy: authorityId, remark: `Requested ${hoursRequested}h extension.` });
+        issue.statusHistory.push({ status: 'PENDING_EXTENSION', changedBy: authorityId, remark: `Requested ${requestedTimeValue} ${requestedTimeUnit} extension.` });
         issue.auditLog.push({ action: 'EXTENSION_REQUESTED', performedBy: authorityId, details: `Reason: ${reason}` });
 
         await issue.save();
