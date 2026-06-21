@@ -47,7 +47,6 @@ const issueModel = new mongoose.Schema({
         pinCode: {
             type: String,
             trim: true,
-            required: [true, 'Pincode is required'],
             index: true
         },
         state: {

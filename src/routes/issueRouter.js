@@ -22,7 +22,7 @@ const Share = require('../models/Share');
 const calculateImpactScore = require('../utils/impactScore');
 const TempMedia = require('../models/TempMedia');
 const triggerNotification = require('../utils/notificationService');
-const { DeleteObjectCommand } = require('@aws-sdk/client-s3');
+const { DeleteObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { checkAndAssignRank } = require('../utils/gamification');
 const { S3Client } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
@@ -123,7 +123,6 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
         const missing = [];
         if (!location?.state) missing.push("state");
         if (!location?.city) missing.push("city");
-        if (!location?.pinCode) missing.push("pincode");
 
         if (missing.length > 0) {
             return res.status(400).json({
@@ -168,6 +167,7 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
             location: {
                 address: finalIsAnonymous ? 'Anonymous location' : (location?.address || 'Location not provided'),
                 city: location.city,
+                district: location.district || location.city, // 👈 THE FIX IS HERE
                 pinCode: location.pinCode,
                 state: location.state,
                 geoData: {
@@ -176,7 +176,7 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
                 }
             },
             priority,
-            impactScore: initialImpactScore, // <-- NEW: Injected calculated score
+            impactScore: initialImpactScore,
             media: media.map(url => ({ url })),
             thumbnails: thumbnails || [],
             status: "OPEN",
@@ -186,6 +186,15 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
         await User.findByIdAndUpdate(userId, { $inc: { issuesReported: 1, civilScore: 20 } });
         if (media.length > 0) await TempMedia.deleteMany({ url: { $in: media } });
         try { await checkAndAssignRank(userId); } catch (e) { }
+
+        const io = req.app.get('io');
+        if (io) {
+            // Fetch the populated version so the frontend card has the author details
+            const populatedIssue = await Issue.findById(newIssue._id)
+                .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email');
+
+            io.emit('new_issue', populatedIssue);
+        }
 
         return res.status(201).json({ success: true, message: "recorded", issueId: newIssue._id });
 
@@ -371,6 +380,13 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
         });
 
         await issue.save();
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue // Send the freshly saved document
+            });
+        }
         return res.status(200).json({ success: true, message: "Issue updated successfully", issue });
 
     } catch (err) {
@@ -435,6 +451,12 @@ issueRouter.delete('/issue/:id', userAuth, statusAuth, profileAuth, async (req, 
             isPublic: false
         });
 
+        const io = req.app.get('io');
+        if (io) {
+            // Tells all frontends to instantly remove this card from the feed
+            io.emit('issue_deleted', { issueId: id });
+        }
+
         return res.status(200).json({
             success: true,
             message: "Issue deleted successfully"
@@ -498,6 +520,15 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
                 io: req.app.get('io')
             });
 
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('issue_stats_updated', {
+                    issueId: confirmedIssue._id,
+                    confirmationCount: confirmedIssue.confirmationCount,
+                    impactScore: confirmedIssue.impactScore
+                });
+            }
+
             return res.status(200).json({
                 success: true,
                 message: "Issue confirmed successfully",
@@ -514,6 +545,126 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
     } catch (err) {
         console.log(err);
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
+    }
+});
+
+// =========================================================================
+// 2. POST CITIZEN VERIFICATION (The Consensus Engine)
+// =========================================================================
+// Finalized with Geofencing and Weighted Consensus
+issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { verdict, proofUrl, userLat, userLng } = req.body;
+        const userId = req.userId.toString();
+
+        if (!['APPROVED', 'OPPOSED'].includes(verdict)) {
+            return res.status(400).json({ success: false, message: "Verdict must be APPROVED or OPPOSED." });
+        }
+
+        // 1. NATIVE GEOFENCING CHECK
+        // We find the issue ONLY if it's in a valid state AND the user is within 500m
+        const issue = await Issue.findOne({
+            _id: id,
+            status: 'RESOLVED',
+            'workCycle.escrow.isEscrowActive': true,
+            'location.geoData': {
+                $near: {
+                    $geometry: { type: "Point", coordinates: [parseFloat(userLng), parseFloat(userLat)] },
+                    $maxDistance: 500 // Strictly 500 meters
+                }
+            }
+        });
+
+        if (!issue) {
+            return res.status(403).json({
+                success: false,
+                message: "Issue not found or you are outside the 500m verification range."
+            });
+        }
+
+        // 2. ELIGIBILITY CHECK
+        const isReporter = issue.reportedBy.toString() === userId;
+        const confirmerIndex = issue.confirmations.findIndex(c => c.user.toString() === userId);
+        const isConfirmer = confirmerIndex !== -1;
+
+        if (!isReporter && !isConfirmer) {
+            return res.status(403).json({ success: false, message: "Only reporter or confirmers can vote." });
+        }
+
+        // 3. ENFORCE PROOF FOR OPPOSITION
+        if (verdict === 'OPPOSED' && !proofUrl) {
+            return res.status(400).json({ success: false, message: "Live photo counter-proof is required." });
+        }
+
+        // 4. LOG THE VOTE
+        if (isReporter) {
+            if (issue.reportedByVerdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
+            issue.reportedByVerdict = verdict;
+            if (verdict === 'OPPOSED') {
+                issue.reportedByVerdictMedia = proofUrl;
+                // 🟢 Push the counter-proof into the main media carousel
+                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
+            }
+        } else {
+            if (issue.confirmations[confirmerIndex].verdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
+            issue.confirmations[confirmerIndex].verdict = verdict;
+            if (verdict === 'OPPOSED') {
+                issue.confirmations[confirmerIndex].verdictMedia = proofUrl;
+                // 🟢 Push the counter-proof into the main media carousel
+                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
+            }
+        }
+
+        // How the weightage of voting calc.
+
+        // 5. WEIGHTED QUORUM MATH (Reporter = 3x weight, Confirmers = 1x weight)
+        const REPORTER_WEIGHT = 3;
+        const totalConfirmers = issue.confirmations.length;
+        const totalVotingPower = REPORTER_WEIGHT + totalConfirmers;
+
+        let currentOpposePower = 0;
+        if (issue.reportedByVerdict === 'OPPOSED') currentOpposePower += REPORTER_WEIGHT;
+        currentOpposePower += issue.confirmations.filter(c => c.verdict === 'OPPOSED').length;
+
+        const oppositionRatio = currentOpposePower / totalVotingPower;
+
+        // 6. TRIGGER DISPUTE (> 40% Opposition)
+        if (oppositionRatio > 0.40) {
+            issue.status = 'DISPUTED';
+            issue.workCycle.escrow.isEscrowActive = false; // FREEZE FUNDS
+            issue.workCycle.finalVerdict = 'OPPOSED';
+
+            issue.statusHistory.push({ status: 'DISPUTED', changedBy: userId, remark: 'Community Consensus rejected the fix.' });
+            issue.auditLog.push({ action: 'ESCROW_FROZEN', performedBy: userId, details: `Opposition hit ${(oppositionRatio * 100).toFixed(1)}%.` });
+
+            // Notify Official
+            const io = req.app.get('io');
+            if (io && issue.bidding?.winningBid?.authorityId) {
+                triggerNotification({
+                    recipientId: issue.bidding.winningBid.authorityId,
+                    senderId: userId,
+                    issueId: issue._id,
+                    type: 'URGENT',
+                    message: `🚨 Fix for "${issue.title}" was rejected by the community. Reward frozen.`,
+                    io
+                }).catch(e => console.error(e));
+            }
+        }
+
+        await issue.save();
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
+        }
+        return res.status(200).json({ success: true, message: "Vote logged.", oppositionRatio: `${(oppositionRatio * 100).toFixed(1)}%` });
+
+    } catch (err) {
+        console.error("Verification Vote Error:", err);
+        return res.status(500).json({ success: false, message: "Server error logging vote." });
     }
 });
 
@@ -570,6 +721,15 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
                 }).catch(err => console.error("Flag notification error:", err));
             } catch (notificationError) {
                 console.error("Non-fatal error triggering flag notification:", notificationError);
+            }
+
+            const io = req.app.get('io');
+            if (io) {
+                io.emit('issue_stats_updated', {
+                    issueId: updatedIssue._id,
+                    flagCount: updatedIssue.flagCount,
+                    impactScore: updatedIssue.impactScore
+                });
             }
 
             return res.status(200).json({
@@ -702,18 +862,11 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
 
 issueRouter.put('/issue/:id/share', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
-        // Extract authenticated userId (set by auth middleware)
         const { userId } = req;
-
-        // Extract issue id from route params
         const { id } = req.params;
 
-        // Validate MongoDB ObjectId early to avoid unnecessary DB calls
         if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({
-                success: false,
-                message: "Invalid Issue"
-            });
+            return res.status(400).json({ success: false, message: "Invalid Issue" });
         }
 
         await Share.create({ userId, issueId: id });
@@ -724,20 +877,23 @@ issueRouter.put('/issue/:id/share', userAuth, statusAuth, profileAuth, async (re
             { new: true }
         );
 
-        // If issue does not exist or is soft-deleted
         if (!issue) {
-            return res.status(404).json({
-                success: false,
-                message: "Issue not found"
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        issue.impactScore = calculateImpactScore(issue);
+        await issue.save();
+
+        // 🟢 FIXED: Moved inside the TRY block so it actually broadcasts!
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_stats_updated', {
+                issueId: issue._id,
+                shareCount: issue.shareCount,
+                impactScore: issue.impactScore
             });
         }
 
-        // --- NEW: Recalculate and save impact score ---
-        issue.impactScore = calculateImpactScore(issue);
-        await issue.save();
-        // ----------------------------------------------
-
-        // Successful share
         return res.status(200).json({
             success: true,
             message: "Issue shared",
@@ -746,20 +902,11 @@ issueRouter.put('/issue/:id/share', userAuth, statusAuth, profileAuth, async (re
     }
     catch (err) {
         if (err.code === 11000) {
-            return res.status(200).json({
-                success: true,
-                message: "You have already shared this issue"
-            });
+            return res.status(200).json({ success: true, message: "You have already shared this issue" });
         }
-
-        // Log unexpected errors for debugging
         console.error(err);
-
-        // Generic server error response
-        return res.status(500).json({
-            success: false,
-            message: "Server error while sharing"
-        });
+        // 🟢 FIXED: Deleted the broken emit from here.
+        return res.status(500).json({ success: false, message: "Server error while sharing" });
     }
 });
 
@@ -864,118 +1011,7 @@ issueRouter.get('/issue/:id/verify/presign', userAuth, statusAuth, profileAuth, 
 });
 
 
-// =========================================================================
-// 2. POST CITIZEN VERIFICATION (The Consensus Engine)
-// =========================================================================
-// Finalized with Geofencing and Weighted Consensus
-issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (req, res) => {
-    try {
-        const { id } = req.params;
-        const { verdict, proofUrl, userLat, userLng } = req.body;
-        const userId = req.userId.toString();
 
-        if (!['APPROVED', 'OPPOSED'].includes(verdict)) {
-            return res.status(400).json({ success: false, message: "Verdict must be APPROVED or OPPOSED." });
-        }
-
-        // 1. NATIVE GEOFENCING CHECK
-        // We find the issue ONLY if it's in a valid state AND the user is within 500m
-        const issue = await Issue.findOne({
-            _id: id,
-            status: 'RESOLVED',
-            'workCycle.escrow.isEscrowActive': true,
-            'location.geoData': {
-                $near: {
-                    $geometry: { type: "Point", coordinates: [parseFloat(userLng), parseFloat(userLat)] },
-                    $maxDistance: 500 // Strictly 500 meters
-                }
-            }
-        });
-
-        if (!issue) {
-            return res.status(403).json({
-                success: false,
-                message: "Issue not found or you are outside the 500m verification range."
-            });
-        }
-
-        // 2. ELIGIBILITY CHECK
-        const isReporter = issue.reportedBy.toString() === userId;
-        const confirmerIndex = issue.confirmations.findIndex(c => c.user.toString() === userId);
-        const isConfirmer = confirmerIndex !== -1;
-
-        if (!isReporter && !isConfirmer) {
-            return res.status(403).json({ success: false, message: "Only reporter or confirmers can vote." });
-        }
-
-        // 3. ENFORCE PROOF FOR OPPOSITION
-        if (verdict === 'OPPOSED' && !proofUrl) {
-            return res.status(400).json({ success: false, message: "Live photo counter-proof is required." });
-        }
-
-        // 4. LOG THE VOTE
-        if (isReporter) {
-            if (issue.reportedByVerdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
-            issue.reportedByVerdict = verdict;
-            if (verdict === 'OPPOSED') {
-                issue.reportedByVerdictMedia = proofUrl;
-                // 🟢 Push the counter-proof into the main media carousel
-                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
-            }
-        } else {
-            if (issue.confirmations[confirmerIndex].verdict !== 'PENDING') return res.status(400).json({ success: false, message: "Already voted." });
-            issue.confirmations[confirmerIndex].verdict = verdict;
-            if (verdict === 'OPPOSED') {
-                issue.confirmations[confirmerIndex].verdictMedia = proofUrl;
-                // 🟢 Push the counter-proof into the main media carousel
-                issue.media.push({ url: proofUrl, uploadedAt: new Date() });
-            }
-        }
-
-        // How the weightage of voting calc.
-
-        // 5. WEIGHTED QUORUM MATH (Reporter = 3x weight, Confirmers = 1x weight)
-        const REPORTER_WEIGHT = 3;
-        const totalConfirmers = issue.confirmations.length;
-        const totalVotingPower = REPORTER_WEIGHT + totalConfirmers;
-
-        let currentOpposePower = 0;
-        if (issue.reportedByVerdict === 'OPPOSED') currentOpposePower += REPORTER_WEIGHT;
-        currentOpposePower += issue.confirmations.filter(c => c.verdict === 'OPPOSED').length;
-
-        const oppositionRatio = currentOpposePower / totalVotingPower;
-
-        // 6. TRIGGER DISPUTE (> 40% Opposition)
-        if (oppositionRatio > 0.40) {
-            issue.status = 'DISPUTED';
-            issue.workCycle.escrow.isEscrowActive = false; // FREEZE FUNDS
-            issue.workCycle.finalVerdict = 'OPPOSED';
-
-            issue.statusHistory.push({ status: 'DISPUTED', changedBy: userId, remark: 'Community Consensus rejected the fix.' });
-            issue.auditLog.push({ action: 'ESCROW_FROZEN', performedBy: userId, details: `Opposition hit ${(oppositionRatio * 100).toFixed(1)}%.` });
-
-            // Notify Official
-            const io = req.app.get('io');
-            if (io && issue.bidding?.winningBid?.authorityId) {
-                triggerNotification({
-                    recipientId: issue.bidding.winningBid.authorityId,
-                    senderId: userId,
-                    issueId: issue._id,
-                    type: 'URGENT',
-                    message: `🚨 Fix for "${issue.title}" was rejected by the community. Reward frozen.`,
-                    io
-                }).catch(e => console.error(e));
-            }
-        }
-
-        await issue.save();
-        return res.status(200).json({ success: true, message: "Vote logged.", oppositionRatio: `${(oppositionRatio * 100).toFixed(1)}%` });
-
-    } catch (err) {
-        console.error("Verification Vote Error:", err);
-        return res.status(500).json({ success: false, message: "Server error logging vote." });
-    }
-});
 
 
 module.exports = issueRouter;

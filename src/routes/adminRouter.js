@@ -111,7 +111,7 @@ adminRouter.get('/admin/issues', userAuth, adminAuth, async (req, res) => {
 adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single('media'), async (req, res) => {
     try {
         const { id } = req.params;
-        const userId = req.userId; // The Admin making the change
+        const userId = req.userId;
         const io = req.app.get('io');
         const file = req.file;
 
@@ -135,16 +135,11 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
         let newStatus = null;
         let officialRemark = updateData.adminRemark || "";
         let pushQuery = {};
-        const auditLogsToPush = []; // Array to handle multiple audit logs safely
+        const auditLogsToPush = [];
         let r2PublicUrl = null;
-
-        if (updateData.status && updateData.status.toUpperCase() === 'RESOLVED' && !file) {
-            return res.status(400).json({ success: false, message: "Resolution evidence (image or video) is strictly required." });
-        }
 
         if (file) {
             try {
-                console.log(`🚀 Starting Direct R2 Upload for Evidence...`);
                 const fileStream = fs.createReadStream(file.path);
                 const uniqueFileName = `evidence-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
 
@@ -157,11 +152,9 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
 
                 await s3.send(command);
                 r2PublicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
-                console.log(`✅ Evidence Uploaded: ${uniqueFileName}`);
 
                 if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
             } catch (uploadError) {
-                console.error("🔥 Cloudflare R2 Upload Error:", uploadError);
                 if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
                 return res.status(500).json({ success: false, message: "Failed to upload evidence to cloud storage." });
             }
@@ -172,7 +165,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             const validStatus = ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"];
 
             if (!validStatus.includes(newStatus)) {
-                return res.status(400).json({ success: false, message: `Invalid status. Allowed values: ${validStatus.join(', ')}` });
+                return res.status(400).json({ success: false, message: `Invalid status.` });
             }
 
             updateData.status = newStatus;
@@ -189,13 +182,8 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
         const mongooseUpdate = { $set: updateData };
         let pendingEscrowReward = null;
 
-        // 🟢 THE FIX: UNIVERSAL AUTHORITY SYNC
-        // If the admin picked someone from the dropdown, force them into the issue's ownership immediately.
         if (updateData.resolvedByAuthority) {
             const targetAuthId = updateData.resolvedByAuthority;
-
-            // To avoid MongoDB "PathNotViable" errors when winningBid is null, 
-            // we must overwrite the entire object instead of using dot-notation inside it.
             const existingTime = currentIssue.bidding?.winningBid?.commitmentTimeHours || 24;
             const existingAcceptedAt = currentIssue.bidding?.winningBid?.acceptedAt || Date.now();
 
@@ -205,19 +193,17 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                 acceptedAt: existingAcceptedAt
             };
 
-            // 2. Initialize default deadline if it was missing to prevent UI crashes
             if (!currentIssue.workCycle?.commitmentDeadline) {
                 mongooseUpdate.$set['workCycle.commitmentDeadline'] = new Date(Date.now() + (24 * 60 * 60 * 1000));
             }
 
-            // 3. Inject a targeted audit log to sync perfectly with the Frontend Career Queries
             let actionLabel = 'ADMIN_ATTRIBUTED_ACTION';
-            if (newStatus === 'FAILED') actionLabel = 'FORCE_UNASSIGNED'; // Triggers the FAILED career tab
-            if (newStatus === 'RELEASED') actionLabel = 'JOB_RELEASED';   // Triggers the RELEASED career tab
+            if (newStatus === 'FAILED') actionLabel = 'FORCE_UNASSIGNED';
+            if (newStatus === 'RELEASED') actionLabel = 'JOB_RELEASED';
 
             auditLogsToPush.push({
                 action: actionLabel,
-                performedBy: targetAuthId, // Attribute this explicitly to the official, NOT the admin
+                performedBy: targetAuthId,
                 details: `Admin explicitly attributed the ${newStatus || currentIssue.status} status to this official.`
             });
         }
@@ -265,7 +251,7 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
                     if (!mongooseUpdate.$push) mongooseUpdate.$push = {};
                     mongooseUpdate.$push.media = {
                         url: r2PublicUrl,
-                        type: file.mimetype.startsWith('video') ? 'video' : 'image'
+                        type: file ? (file.mimetype.startsWith('video') ? 'video' : 'image') : 'image'
                     };
                 }
 
@@ -280,7 +266,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             }
         }
 
-        // Apply our safely buffered audit logs
         if (auditLogsToPush.length > 0) {
             pushQuery.auditLog = { $each: auditLogsToPush };
         }
@@ -290,7 +275,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             Object.assign(mongooseUpdate.$push, pushQuery);
         }
 
-        // Execute the Database Update
         const updatedIssue = await Issue.findByIdAndUpdate(
             id,
             mongooseUpdate,
@@ -301,7 +285,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
-        // Escrow handling
         if (pendingEscrowReward) {
             await User.findByIdAndUpdate(pendingEscrowReward.authorityId, {
                 $inc: {
@@ -312,7 +295,6 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             });
         }
 
-        // Push Notifications
         if (isStatusUpdated) {
             try {
                 let notificationType = null;
@@ -354,6 +336,20 @@ adminRouter.patch('/admin/issue/:id', userAuth, adminAuth, uploadEvidence.single
             } catch (notificationError) {
                 console.error("Non-fatal error checking admin notification triggers:", notificationError);
             }
+        }
+
+        // 🟢 FIXED: Clean, single real-time emission block
+        if (io) {
+            if (isStatusUpdated) {
+                io.emit('issue_status_updated', {
+                    issueId: updatedIssue._id,
+                    newStatus: newStatus
+                });
+            }
+            io.emit('issue_updated', {
+                issueId: updatedIssue._id,
+                updatedData: updatedIssue
+            });
         }
 
         return res.status(200).json({
@@ -420,6 +416,11 @@ adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => 
             { savedIssues: id },
             { $pull: { savedIssues: id } }
         );
+
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('global_feed_refresh');
+        }
 
         return res.status(200).json({
             success: true,
@@ -710,6 +711,10 @@ adminRouter.delete('/admin/user/:id', userAuth, adminAuth, async (req, res) => {
 
         // Delete the user
         await User.findByIdAndDelete(id);
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('global_feed_refresh');
+        }
 
         return res.status(200).json(
             {
@@ -1351,6 +1356,17 @@ adminRouter.patch('/admin/issue/:id/force-assign', userAuth, adminAuth, async (r
             io: io
         }).catch(e => console.log(e));
 
+        if (io) {
+            io.emit('issue_status_updated', {
+                issueId: issue._id, // or updatedIssue._id depending on the route
+                newStatus: 'LOCKED' // or 'OPEN' for unassign
+            });
+            // 🟢 ADD THIS: Broadcast the full issue so the Official Name and Deadline update!
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue // Make sure to pass the updated document here!
+            });
+        }
         return res.status(200).json({ success: true, message: "Issue forcefully assigned and locked" });
     } catch (err) {
         return res.status(500).json({ success: false, message: "Failed to force assign" });
@@ -1368,7 +1384,6 @@ adminRouter.patch('/admin/issue/:id/force-unassign', userAuth, adminAuth, async 
 
         const authorityId = issue.bidding.winningBid.authorityId;
 
-        // Reset issue to open
         await Issue.findByIdAndUpdate(issueId, {
             $set: { status: 'OPEN', 'bidding.winningBid': null, 'workCycle.commitmentDeadline': null },
             $push: {
@@ -1377,7 +1392,6 @@ adminRouter.patch('/admin/issue/:id/force-unassign', userAuth, adminAuth, async 
             }
         });
 
-        // Apply Penalty and Notify
         if (penaltyPoints && penaltyPoints > 0) {
             await User.findByIdAndUpdate(authorityId, {
                 $inc: { 'authorityProfile.csiScore': -Math.abs(penaltyPoints), 'authorityProfile.jobsFailed': 1 }
@@ -1389,6 +1403,16 @@ adminRouter.patch('/admin/issue/:id/force-unassign', userAuth, adminAuth, async 
             message: `Admin has forcefully removed you from the issue "${issue.title}". Penalty: -${penaltyPoints || 0} CSI. Reason: ${reason}`,
             io: req.app.get('io')
         }).catch(e => console.log(e));
+
+        // 🟢 FIXED: Broadcast OPEN status and refresh feed
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_status_updated', {
+                issueId: issueId,
+                newStatus: 'OPEN'
+            });
+            io.emit('global_feed_refresh');
+        }
 
         return res.status(200).json({ success: true, message: "Authority stripped from issue" });
     } catch (err) {
@@ -1628,6 +1652,10 @@ adminRouter.delete('/admin/issue/:id', userAuth, adminAuth, async (req, res) => 
 
         // Scrub all ghost notifications tied to this deleted issue
         await Notification.deleteMany({ issue: id });
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_deleted', { issueId: id }); // Changed from global_feed_refresh
+        }
 
         return res.status(200).json({
             success: true,
@@ -1705,6 +1733,13 @@ adminRouter.patch('/admin/issue/:id/boost', userAuth, adminAuth, async (req, res
             },
             { new: true }
         );
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_stats_updated', {
+                issueId: issue._id,
+                impactScore: issue.impactScore
+            });
+        }
 
         return res.status(200).json({ success: true, message: `Score boosted by ${bonusPoints}`, data: issue });
     } catch (err) {
@@ -1725,6 +1760,13 @@ adminRouter.patch('/admin/issue/:id/recategorize', userAuth, adminAuth, async (r
             },
             { new: true }
         );
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
+        }
 
         return res.status(200).json({ success: true, message: "Issue re-categorized successfully", data: issue });
     } catch (err) {
@@ -1916,25 +1958,20 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
             return res.status(400).json({ success: false, message: "Issue is not pending an extension" });
         }
 
-        // Find the index of the pending request
         const requestIndex = issue.workCycle.extensionRequests.findIndex(r => r.status === 'PENDING');
         if (requestIndex === -1) {
             return res.status(400).json({ success: false, message: "No pending extension request found" });
         }
 
-        // 🟢 If Admin is approving, use the provided timeValue/timeUnit. 
-        // If Admin is rejecting, use the values that were already in the request or default to 0.
         const finalTimeValue = timeValue || issue.workCycle.extensionRequests[requestIndex].requestedTimeValue;
         const finalTimeUnit = timeUnit || issue.workCycle.extensionRequests[requestIndex].requestedTimeUnit;
 
-        // Calculate hours for the calculation logic
         const multipliers = { 'HOURS': 1, 'DAYS': 24, 'WEEKS': 168, 'MONTHS': 720 };
         const totalHours = finalTimeValue * (multipliers[finalTimeUnit] || 1);
 
         const now = new Date();
         const pausedDurationMs = issue.workCycle.pausedAt ? (now.getTime() - issue.workCycle.pausedAt.getTime()) : 0;
 
-        // Prepare the atomic update
         const update = {
             $set: {
                 status: 'LOCKED',
@@ -1942,7 +1979,6 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
                 'workCycle.pausedAt': null,
                 [`workCycle.extensionRequests.${requestIndex}.status`]: action,
                 [`workCycle.extensionRequests.${requestIndex}.adminRemark`]: adminRemark || '',
-                // 🟢 Save the original input values so they aren't lost
                 [`workCycle.extensionRequests.${requestIndex}.requestedTimeValue`]: Number(finalTimeValue),
                 [`workCycle.extensionRequests.${requestIndex}.requestedTimeUnit`]: finalTimeUnit,
                 [`workCycle.extensionRequests.${requestIndex}.hoursRequested`]: totalHours
@@ -1961,7 +1997,6 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
             }
         };
 
-        // Update deadline
         if (action === 'APPROVED') {
             const extraTimeMs = totalHours * 60 * 60 * 1000;
             update.$set['workCycle.commitmentDeadline'] = new Date(issue.workCycle.commitmentDeadline.getTime() + extraTimeMs + pausedDurationMs);
@@ -1971,7 +2006,6 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
 
         const updatedIssue = await Issue.findByIdAndUpdate(id, update, { new: true });
 
-        // Notify official
         if (updatedIssue.bidding?.winningBid?.authorityId) {
             triggerNotification({
                 recipientId: updatedIssue.bidding.winningBid.authorityId,
@@ -1981,6 +2015,19 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
                 message: `Your extension request for "${updatedIssue.title}" was ${action}.`,
                 io: req.app.get('io')
             }).catch(e => console.error(e));
+        }
+
+        // 🟢 FIXED: Broadcasting using 'updatedIssue' so the correct data goes out
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('issue_status_updated', {
+                issueId: updatedIssue._id,
+                newStatus: 'LOCKED'
+            });
+            io.emit('issue_updated', {
+                issueId: updatedIssue._id,
+                updatedData: updatedIssue
+            });
         }
 
         return res.status(200).json({ success: true, message: `Extension ${action.toLowerCase()} successfully`, data: updatedIssue });

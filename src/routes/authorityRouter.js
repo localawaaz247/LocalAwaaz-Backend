@@ -368,8 +368,10 @@ authorityRouter.post('/authority/radar/bid/:issueId', userAuth, authorityAuth, a
         });
 
         await issue.save();
-
-        // 🟢 NEW: MASS NOTIFICATION SYSTEM
+        const populatedIssue = await Issue.findById(issue._id)
+            .populate('reportedBy', 'name role')
+            .populate('bidding.winningBid.authorityId', 'name');
+        
         const io = req.app.get('io');
 
         if (io) {
@@ -399,6 +401,14 @@ authorityRouter.post('/authority/radar/bid/:issueId', userAuth, authorityAuth, a
                     io
                 });
             }
+            io.emit('issue_status_updated', {
+                issueId: issue._id,
+                newStatus: 'LOCKED'
+            });
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
         }
 
         return res.status(200).json({
@@ -511,6 +521,14 @@ authorityRouter.post('/authority/issues/:issueId/resolve', userAuth, authorityAu
                     io
                 });
             }
+            io.emit('issue_status_updated', {
+                issueId: issue._id,
+                newStatus: 'RESOLVED'
+            });
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
         }
 
         await User.findByIdAndUpdate(authorityId, {
@@ -579,6 +597,14 @@ authorityRouter.post('/authority/issues/:issueId/handover', userAuth, authorityA
                 message: `The official assigned to "${issue.title}" has stepped down. The issue is back on the open market for new bids.`,
                 io
             });
+            io.emit('issue_status_updated', {
+                issueId: issue._id,
+                newStatus: 'OPEN'
+            });
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
         }
 
         await User.findByIdAndUpdate(authorityId, {
@@ -645,6 +671,14 @@ authorityRouter.post('/authority/issues/:issueId/extend', userAuth, authorityAut
                 type: 'UPDATE',
                 message: `The official assigned to "${issue.title}" requested a deadline extension. Reason: ${reason}`,
                 io
+            });
+            io.emit('issue_status_updated', {
+                issueId: issue._id,
+                newStatus: 'PENDING_EXTENSION'
+            });
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
             });
         }
 
