@@ -1109,6 +1109,15 @@ adminRouter.patch('/admin/approve-authority/:id', userAuth, adminAuth, async (re
             console.error("Non-fatal error triggering approval notification:", notificationError);
         }
 
+        // 🟢 INJECT THE REAL-TIME EMIT RIGHT HERE
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('authority_status_updated', {
+                authorityId: user._id,
+                newStatus: 'APPROVED' // Hardcoded since this route is explicitly for approvals
+            });
+        }
+
         return res.status(200).json({
             success: true,
             message: "Authority approved and credentials dispatched successfully",
@@ -1202,6 +1211,15 @@ adminRouter.patch('/admin/authority/:id/status', userAuth, adminAuth, async (req
             } catch (notificationError) {
                 console.error("Non-fatal error triggering authority notification:", notificationError);
             }
+        }
+
+        // 🟢 INJECT THE REAL-TIME EMIT RIGHT HERE
+        const io = req.app.get('io');
+        if (io) {
+            io.emit('authority_status_updated', {
+                authorityId: updatedUser._id,
+                newStatus: status.toUpperCase()
+            });
         }
 
         return res.status(200).json({
