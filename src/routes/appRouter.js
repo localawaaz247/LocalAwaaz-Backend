@@ -2,7 +2,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const AppRelease = require('../models/AppRelease');
 const appRouter = express.Router();
-const OtaUpdate = require('../models/OtaUpdate');
+const OtaUpdate = require('../models/otaUpdate');
 
 appRouter.get('/app/latest', async (req, res) => {
     try {
