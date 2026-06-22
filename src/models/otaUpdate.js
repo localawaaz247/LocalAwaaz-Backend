@@ -4,7 +4,7 @@ const otaUpdateSchema = new mongoose.Schema({
     version: {
         type: String,
         required: true,
-        unique: true // e.g., "1.0.1"
+        unique: true // e.g., "1.0.1" 
     },
     url: {
         type: String,
