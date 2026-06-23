@@ -138,15 +138,51 @@ userRouter.get('/me/profile', userAuth, statusAuth, async (req, res) => {
     }
 })
 
+// Route to check username uniqueness in real-time
+userRouter.get('/check-username', async (req, res) => {
+    try {
+        const { q } = req.query;
+
+        // Basic validation
+        if (!q || q.trim().length < 3) {
+            return res.json({ available: false, message: "Username too short" });
+        }
+
+        // Check if username exists (case-insensitive)
+        const existingUser = await User.findOne({
+            userName: { $regex: new RegExp(`^${q.trim()}$`, 'i') }
+        });
+
+        if (existingUser) {
+            return res.json({ available: false });
+        }
+
+        return res.json({ available: true });
+    } catch (err) {
+        console.error("Username check error:", err);
+        return res.status(500).json({ available: false, error: "Server error" });
+    }
+});
+
 userRouter.patch('/me/profile', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { userId } = req;
 
         // 1. Explicit Destructuring (Security)
         // -> Added 'language' to the extracted fields
-        const { name, profilePic, gender, bio, address, password, isAnonymous, globalNotification, language } = req.body;
+        const { userName, name, profilePic, gender, bio, address, password, isAnonymous, globalNotification, language } = req.body;
 
         const updates = {};
+
+        if (userName) {
+            const cleanUserName = userName.trim().toLowerCase();
+            // Optional: Add regex validation for valid username characters here
+            const existingUser = await User.findOne({ userName: cleanUserName, _id: { $ne: userId } });
+            if (existingUser) {
+                return res.status(400).json({ success: false, message: "Username is already taken" });
+            }
+            updates.userName = cleanUserName;
+        }
 
         // 2. Validation & Assignment
         if (name) {
