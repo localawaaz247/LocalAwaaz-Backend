@@ -25,7 +25,7 @@ const sanitizeAndValidateInquiry = (req, res, next) => {
         return res.status(400).json({ success: false, message: "Invalid input data type format" });
     }
 
-    // 2. Trim whitespace
+    // 2. Trim whitespace (removes leading/trailing spaces, but keeps internal spaces)
     const cleanName = name.trim();
     const cleanEmail = email.trim();
     const cleanMessage = message.trim();
@@ -35,7 +35,6 @@ const sanitizeAndValidateInquiry = (req, res, next) => {
         return res.status(400).json({ success: false, message: 'Please enter all fields' });
     }
 
-    // Prevent extremely long string payloads (Denial of Service protection)
     if (cleanName.length < 3 || cleanName.length > 50) {
         return res.status(400).json({ success: false, message: "Name must be between 3 and 50 chars" });
     }
@@ -44,13 +43,13 @@ const sanitizeAndValidateInquiry = (req, res, next) => {
         return res.status(400).json({ success: false, message: "Enter valid email id" });
     }
 
-    const wordCount = cleanMessage.split(/\s+/).length;
-    if (wordCount > 50) {
-        return res.status(400).json({ success: false, message: "Message is too long (max 50 words)!!" });
+    // STRICT 50 CHARACTER LIMIT
+    // This counts every keystroke inside the string, including spaces.
+    if (cleanMessage.length > 50) {
+        return res.status(400).json({ success: false, message: "Message cannot exceed 50 characters." });
     }
 
     // 4. Sanitize against XSS (Escape HTML/Scripts)
-    // validator.escape() converts <, >, &, ', ", and / to HTML entities.
     req.body.name = validator.escape(cleanName);
     req.body.email = validator.normalizeEmail(cleanEmail);
     req.body.message = validator.escape(cleanMessage);
