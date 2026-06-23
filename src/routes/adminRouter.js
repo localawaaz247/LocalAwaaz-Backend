@@ -1260,6 +1260,11 @@ adminRouter.patch('/admin/user/:id/points', userAuth, adminAuth, async (req, res
             { new: true }
         );
 
+        // 👇 NEW: Check for Rank Up/Down if it's a citizen!
+        if (!isAuthority) {
+            await checkAndAssignRank(userId);
+        }
+
         // Notify User
         triggerNotification({
             recipientId: user._id,

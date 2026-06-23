@@ -194,7 +194,7 @@ const startMasterCron = (io) => {
                     try {
                         const authorityId = issue.bidding.winningBid.authorityId;
                         const escrowPoints = issue.workCycle.escrow.pointsHolding;
-
+``
                         await User.findByIdAndUpdate(authorityId, {
                             $inc: {
                                 'authorityProfile.csiScore': escrowPoints,

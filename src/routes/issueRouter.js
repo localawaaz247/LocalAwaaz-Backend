@@ -26,6 +26,7 @@ const { DeleteObjectCommand, PutObjectCommand } = require('@aws-sdk/client-s3');
 const { checkAndAssignRank } = require('../utils/gamification');
 const { S3Client } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const calculateDynamicPriority = require('../utils/priorityCalculator');
 
 const s3 = new S3Client({
     region: "auto",
@@ -141,23 +142,14 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
 
         // FIX: If the frontend sends a boolean (true/false), use it. Otherwise, fallback to global preference, then false.
         const finalIsAnonymous = typeof isAnonymous === 'boolean' ? isAnonymous : (user.preferences?.globalAnonymous || false);
-
-        let priority = 'LOW';
-        switch (category) {
-            case 'SAFETY': case 'HEALTH': case 'CORRUPTION': priority = 'CRITICAL'; break;
-            case 'WATER_SUPPLY': case 'ELECTRICITY': case 'EDUCATION': case 'SANITATION': priority = 'HIGH'; break;
-            case 'ROAD_&_POTHOLES': case 'GARBAGE': case 'STREET_LIGHTS': case 'TRAFFIC': priority = 'MEDIUM'; break;
-        }
-
-        // --- NEW: Calculate initial impact score before creation ---
+        const priority = calculateDynamicPriority(category, user.civilScore, finalIsAnonymous);
         const initialImpactScore = calculateImpactScore({
             shareCount: 0,
             confirmationCount: 0,
             flagCount: 0,
-            priority: priority
+            priority: priority,
+            createdAt: Date.now() // Pass current time for fresh issue
         });
-        // -----------------------------------------------------------
-
         const newIssue = await Issue.create({
             reportedBy: userId,
             title: title.trim(),
@@ -203,59 +195,89 @@ issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) =
     }
 });
 // ---------------------------------------------------------
-// GET: Get issue accoring to issue id
+// POST: Create Issue
 // ---------------------------------------------------------
-issueRouter.get('/issue/:id', async (req, res) => {
+issueRouter.post('/issue', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
-        const { id } = req.params;
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ success: false, message: "Invalid issue id" });
-        }
+        const userId = req.userId;
+        checkIssueCreation(req);
 
-        // .populate() to get the author's details from the User collection
-        const issueRecord = await Issue.findOne({
-            _id: id,
-            isDeleted: false
-        }).populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email ');
+        const { title, category, description, location, isAnonymous, media, thumbnails } = req.body;
 
-        if (!issueRecord) {
-            return res.status(404).json({ // Use 404 for 'Not Found'
+        const missing = [];
+        if (!location?.state) missing.push("state");
+        if (!location?.city) missing.push("city");
+
+        if (missing.length > 0) {
+            return res.status(400).json({
                 success: false,
-                message: "Issue not found"
+                message: `enter ${missing.join(', ')}`
             });
         }
 
-        // 3. ENHANCEMENT: Handle the "isAnonymous" masking for the single issue view
-        // We convert the Mongoose document to a plain JS object so we can modify it safely
-        let responseData = issueRecord.toObject();
-
-        // Explicitly pass the RAW date to a new key
-        responseData.dateOfFormation = responseData.createdAt;
-
-        if (responseData.isAnonymous) {
-            responseData.reportedBy = {
-                name: "Anonymous Citizen",
-                userName: "active_citizen",
-                civilScore: 10,
-                issuesReported: 0,
-                issuesConfirmed: 0,
-                contact: { // Keep the nested structure consistent with your Schema
-                    email: "hidden@localawaaz.in"
-                },
-                profilePic: null,
-                isAnonymous: true
-            };
+        if (!media || !Array.isArray(media) || media.length === 0) {
+            return res.status(400).json({ success: false, message: 'upload media' });
         }
 
-        return res.status(200).json({
-            success: true,
-            message: "Issue details retreived",
-            data: responseData
+        const user = await User.findById(userId);
+        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+        if (!user.isEmailVerified) return res.status(403).json({ success: false, message: 'Verify email' });
+
+        const finalIsAnonymous = typeof isAnonymous === 'boolean' ? isAnonymous : (user.preferences?.globalAnonymous || false);
+
+        // 👇 NEW: Dynamic Priority Calculation based on trust score
+        const priority = calculateDynamicPriority(category, user.civilScore, finalIsAnonymous);
+
+        // 👇 NEW: Calculate initial impact score with timestamp for decay logic
+        const initialImpactScore = calculateImpactScore({
+            shareCount: 0,
+            confirmationCount: 0,
+            flagCount: 0,
+            priority: priority,
+            createdAt: Date.now()
         });
 
+        const newIssue = await Issue.create({
+            reportedBy: userId,
+            title: title.trim(),
+            isAnonymous: finalIsAnonymous,
+            category: category.toUpperCase(),
+            description: description.trim(),
+            location: {
+                address: finalIsAnonymous ? 'Anonymous location' : (location?.address || 'Location not provided'),
+                city: location.city,
+                district: location.district || location.city,
+                pinCode: location.pinCode,
+                state: location.state,
+                geoData: {
+                    type: 'Point',
+                    coordinates: location?.geoData?.coordinates || [0, 0]
+                }
+            },
+            priority,
+            impactScore: initialImpactScore,
+            media: media.map(url => ({ url })),
+            thumbnails: thumbnails || [],
+            status: "OPEN",
+            statusHistory: [{ status: "OPEN", changedBy: userId, note: "Issue reported" }]
+        });
+
+        await User.findByIdAndUpdate(userId, { $inc: { issuesReported: 1, civilScore: 20 } });
+        if (media.length > 0) await TempMedia.deleteMany({ url: { $in: media } });
+        try { await checkAndAssignRank(userId); } catch (e) { }
+
+        const io = req.app.get('io');
+        if (io) {
+            const populatedIssue = await Issue.findById(newIssue._id)
+                .populate('reportedBy', 'name userName profilePic civilScore issuesReported issuesConfirmed contact.email');
+
+            io.emit('new_issue', populatedIssue);
+        }
+
+        return res.status(201).json({ success: true, message: "recorded", issueId: newIssue._id });
+
     } catch (err) {
-        console.error("Issue fetch error : ", err);
-        return res.status(500).json({ success: false, message: "Server Error : Issue not found" });
+        return res.status(500).json({ success: false, message: err.message });
     }
 });
 
@@ -267,7 +289,6 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
         const { userId } = req;
         const { id } = req.params;
 
-        // 🟢 CHANGE 1: Remove 'uploadToken', ensure 'media' is allowed
         const allowedUpdates = ['title', 'category', 'description', 'location', 'media'];
 
         checkIssueUpdates(req);
@@ -285,11 +306,9 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
         if (issue.isDeleted) {
             return res.status(400).json({ success: false, message: "The issue has been deleted" });
         }
-
         if (issue.status !== "OPEN") {
             return res.status(400).json({ success: false, message: "Only issues with status 'OPEN' can be updated" })
         }
-
         if (userId.toString() !== issue.reportedBy.toString()) {
             return res.status(403).json({ success: false, message: 'You are not authorized to update this issue' });
         }
@@ -301,19 +320,21 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
             return res.status(400).json({ success: false, message: "Invalid field in update request" });
         }
 
-        // 🟢 CHANGE 2: Handle Media Updates (The Logic Shift)
+        // 🟢 BUG FIX: Fetch the user here so you have their civilScore for priority calculations below
+        const user = await User.findById(userId).select('civilScore');
+
+        // 2. Handle Media Updates
         if (updates.includes('media')) {
-            const newMediaUrls = req.body.media || []; // Expecting ["url1", "url2"]
+            const newMediaUrls = req.body.media || [];
             const currentMediaUrls = issue.media.map(m => m.url);
 
-            // A. Identify Deleted Images (In DB, but NOT in new request)
             const urlsToDelete = currentMediaUrls.filter(url => !newMediaUrls.includes(url));
 
             if (urlsToDelete.length > 0) {
                 console.log(`🗑️ Deleting ${urlsToDelete.length} removed images...`);
                 for (const url of urlsToDelete) {
                     try {
-                        const key = url.split('/').pop(); // Extract filename from URL
+                        const key = url.split('/').pop();
                         const command = new DeleteObjectCommand({
                             Bucket: process.env.R2_BUCKET_NAME,
                             Key: key,
@@ -325,22 +346,19 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
                 }
             }
 
-            // B. Identify New Images (In new request, but NOT in DB)
             const newlyAddedUrls = newMediaUrls.filter(url => !currentMediaUrls.includes(url));
 
             if (newlyAddedUrls.length > 0) {
-                // "Verify" these new images so Garbage Collector doesn't eat them
                 await TempMedia.deleteMany({ url: { $in: newlyAddedUrls } });
                 console.log(`✅ Verified ${newlyAddedUrls.length} new images.`);
             }
 
-            // C. Update the Issue Record
             issue.media = newMediaUrls.map(url => ({ url }));
         }
 
         // 3. Handle Other Fields
         updates.forEach((field) => {
-            if (field === 'media') return; // Handled above
+            if (field === 'media') return;
 
             if (field === 'location') {
                 const newLoc = req.body.location;
@@ -356,26 +374,15 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
                     };
                 }
             } else if (field === 'category') {
-                // Priority Logic
                 const upperCat = req.body.category.toUpperCase();
-                let newPriority = 'LOW';
-                switch (upperCat) {
-                    case 'SAFETY':
-                    case 'HEALTH':
-                    case 'CORRUPTION': priority = 'CRITICAL'; break;
-                    case 'WATER_SUPPLY':
-                    case 'ELECTRICITY':
-                    case 'EDUCATION':
-                    case 'SANITATION': priority = 'HIGH'; break;
-                    case 'ROAD_&_POTHOLES':
-                    case 'GARBAGE':
-                    case 'STREET_LIGHTS':
-                    case 'TRAFFIC': priority = 'MEDIUM'; break;
-                }
-                issue.priority = newPriority;
+
+                // 👇 RECALCULATE DYNAMIC PRIORITY AND SCORE ON UPDATE
+                issue.priority = calculateDynamicPriority(upperCat, user.civilScore, issue.isAnonymous);
                 issue.category = upperCat;
+                issue.impactScore = calculateImpactScore(issue);
+
             } else {
-                issue[field] = req.body[field]; // Title, Description
+                issue[field] = req.body[field];
             }
         });
 
@@ -384,7 +391,7 @@ issueRouter.patch('/issue/:id', userAuth, statusAuth, profileAuth, async (req, r
         if (io) {
             io.emit('issue_updated', {
                 issueId: issue._id,
-                updatedData: issue // Send the freshly saved document
+                updatedData: issue
             });
         }
         return res.status(200).json({ success: true, message: "Issue updated successfully", issue });
@@ -551,7 +558,6 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
 // =========================================================================
 // 2. POST CITIZEN VERIFICATION (The Consensus Engine)
 // =========================================================================
-// Finalized with Geofencing and Weighted Consensus
 issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (req, res) => {
     try {
         const { id } = req.params;
@@ -563,7 +569,6 @@ issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (
         }
 
         // 1. NATIVE GEOFENCING CHECK
-        // We find the issue ONLY if it's in a valid state AND the user is within 500m
         const issue = await Issue.findOne({
             _id: id,
             status: 'RESOLVED',
@@ -571,7 +576,7 @@ issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (
             'location.geoData': {
                 $near: {
                     $geometry: { type: "Point", coordinates: [parseFloat(userLng), parseFloat(userLat)] },
-                    $maxDistance: 500 // Strictly 500 meters
+                    $maxDistance: 500
                 }
             }
         });
@@ -603,7 +608,6 @@ issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (
             issue.reportedByVerdict = verdict;
             if (verdict === 'OPPOSED') {
                 issue.reportedByVerdictMedia = proofUrl;
-                // 🟢 Push the counter-proof into the main media carousel
                 issue.media.push({ url: proofUrl, uploadedAt: new Date() });
             }
         } else {
@@ -611,21 +615,43 @@ issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (
             issue.confirmations[confirmerIndex].verdict = verdict;
             if (verdict === 'OPPOSED') {
                 issue.confirmations[confirmerIndex].verdictMedia = proofUrl;
-                // 🟢 Push the counter-proof into the main media carousel
                 issue.media.push({ url: proofUrl, uploadedAt: new Date() });
             }
         }
 
-        // How the weightage of voting calc.
+        // 🟢 5. NEW: RANK-WEIGHTED QUORUM MATH
+        // Fetch and populate the rank property of all participants
+        await issue.populate('reportedBy', 'rank');
+        await issue.populate('confirmations.user', 'rank');
 
-        // 5. WEIGHTED QUORUM MATH (Reporter = 3x weight, Confirmers = 1x weight)
-        const REPORTER_WEIGHT = 3;
-        const totalConfirmers = issue.confirmations.length;
-        const totalVotingPower = REPORTER_WEIGHT + totalConfirmers;
+        const getRankWeight = (rankName) => {
+            switch (rankName) {
+                case 'Legend': return 5;
+                case 'Civic Hero': return 4;
+                case 'Community Leader': return 3;
+                case 'Activist': return 2;
+                default: return 1; // Citizen default
+            }
+        };
 
+        // Reporter gets their Rank Weight + an authority premium (+2) for finding the issue
+        const REPORTER_WEIGHT = getRankWeight(issue.reportedBy?.rank) + 2;
+
+        let totalVotingPower = REPORTER_WEIGHT;
         let currentOpposePower = 0;
-        if (issue.reportedByVerdict === 'OPPOSED') currentOpposePower += REPORTER_WEIGHT;
-        currentOpposePower += issue.confirmations.filter(c => c.verdict === 'OPPOSED').length;
+
+        if (issue.reportedByVerdict === 'OPPOSED') {
+            currentOpposePower += REPORTER_WEIGHT;
+        }
+
+        // Aggregate individual voter weights from the confirmations array
+        issue.confirmations.forEach(c => {
+            const weight = getRankWeight(c.user?.rank);
+            totalVotingPower += weight;
+            if (c.verdict === 'OPPOSED') {
+                currentOpposePower += weight;
+            }
+        });
 
         const oppositionRatio = currentOpposePower / totalVotingPower;
 
@@ -668,18 +694,31 @@ issueRouter.post('/issue/:id/verify', userAuth, statusAuth, profileAuth, async (
     }
 });
 
-// POST endpoint to flag an issue for a specific reason
+// =========================================================================
+// POST: Flag Issue
+// =========================================================================
 issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, locationAuth, async (req, res) => {
     try {
         const { userId } = req;
-        const { id } = req.params;
+        const { id, flag: flagParam } = req.params;
+
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Issue ID format" });
         }
-        const flag = checkIssueFlags(req);
 
+        const flag = checkIssueFlags(req);
         if (!flag) {
             return res.status(400).json({ success: false, message: "Invalid Flag reason" });
+        }
+
+        // 🟢 NEW: Extract user rank to calculate dynamic flagging weight
+        const user = await User.findById(userId).select('rank');
+        let flagWeight = 1;
+
+        if (user.rank === 'Legend' || user.rank === 'Civic Hero') {
+            flagWeight = 3; // Senior moderators scale heavily
+        } else if (user.rank === 'Community Leader' || user.rank === 'Activist') {
+            flagWeight = 2;
         }
 
         const updatedIssue = await Issue.findOneAndUpdate(
@@ -690,16 +729,15 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
             },
             {
                 $push: { flags: { flagReason: flag, flaggedBy: userId } },
-                $inc: { flagCount: 1 }
+                $inc: { flagCount: flagWeight } // 🟢 Multiplier applied directly to the field
             },
             { new: true }
         );
 
         if (updatedIssue) {
-            // --- NEW: Recalculate and save impact score ---
+            // --- Recalculate and save impact score ---
             updatedIssue.impactScore = calculateImpactScore(updatedIssue);
             await updatedIssue.save();
-            // ----------------------------------------------
 
             // Give Points for Flagging
             await User.findByIdAndUpdate(userId, {
@@ -708,7 +746,7 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
 
             await checkAndAssignRank(userId);
 
-            // 👇 TRIGGER NOTIFICATION BLOCK ADDED HERE
+            // TRIGGER NOTIFICATION BLOCK
             try {
                 const io = req.app.get('io');
                 triggerNotification({
@@ -747,7 +785,7 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
         return res.status(400).json({ success: false, message: "You have already flagged this Issue" });
 
     } catch (err) {
-        console.log(err);
+        console.error(err);
         return res.status(500).json({ success: false, message: err.message });
     }
 });

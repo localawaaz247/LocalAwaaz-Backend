@@ -1,3 +1,5 @@
+// utils/impactScore.js
+
 const calculateImpactScore = (issue) => {
     // 1. EXTRACT DATA
     const shareCount = issue.shareCount || 0;
@@ -5,53 +7,46 @@ const calculateImpactScore = (issue) => {
     const flagCount = issue.flagCount || 0;
     const priority = issue.priority || 'LOW';
 
-    // 2. CONSTANTS
-    const kShare = 5;
-    const kConfirm = 7;
-    const kFlag = 6;
+    // Fallback to Date.now() for brand new issues not yet saved to DB
+    const creationTime = issue.createdAt ? new Date(issue.createdAt).getTime() : Date.now();
 
-    // 3. DIMINISHING RETURNS (0.0 to 1.0)
-    // Maps count 0 -> 0, count k -> 0.5, count infinity -> 1.0
-    const shareScore = shareCount / (shareCount + kShare);
-    const confirmScore = confirmationCount / (confirmationCount + kConfirm);
-    const flagScore = flagCount / (flagCount + kFlag);
-
-    // 4. WEIGHTS
-    const wShare = 0.2;
-    const wConfirm = 0.4;
-    const wFlag = 0.3;
-
-    // 5. CALCULATE SOCIAL SCORE (Normalized 0 to 1)
-    // We subtract flags because in your model, flags = spam/fake.
-    let weightedSum = (wShare * shareScore) + (wConfirm * confirmScore) - (wFlag * flagScore);
-
-    // Normalize by max positive potential (0.6)
-    const maxPositiveWeight = wShare + wConfirm;
-    let socialScore = weightedSum / maxPositiveWeight;
-
-    // Clamp Social Score between 0 and 1
-    socialScore = Math.min(Math.max(socialScore, 0), 1);
-
-    // 6. PRIORITY BASE SCORE (0 to 100)
-    // Critical issues get a head start regardless of social activity
-    let priorityBase = 0;
+    // 2. PRIORITY BASE SCORE (0 to 100)
+    let baseScore = 20;
     switch (priority) {
-        case 'CRITICAL': priorityBase = 80; break; // Starts very high
-        case 'HIGH': priorityBase = 60; break;
-        case 'MEDIUM': priorityBase = 40; break;
-        case 'LOW': priorityBase = 20; break;
-        default: priorityBase = 20;
+        case 'CRITICAL': baseScore = 70; break;
+        case 'HIGH': baseScore = 50; break;
+        case 'MEDIUM': baseScore = 30; break;
+        case 'LOW': baseScore = 15; break;
     }
 
-    // 7. FINAL BLEND
-    // Formula: Base Priority + (Remaining Room * SocialScore)
-    // E.g. Critical (80) has 20 points of "room" to grow via social proof.
-    // E.g. Low (20) has 80 points of "room" to grow if it goes viral.
+    // 3. STRICT FLAG PENALTY
+    // Flags are community moderation. If flags >= confirmations, the issue loses massive credibility.
+    let flagPenaltyMultiplier = 1.0;
+    if (flagCount > 0) {
+        const approvalVolume = confirmationCount + (shareCount * 0.5);
+        if (flagCount > approvalVolume) {
+            flagPenaltyMultiplier = 0.3; // 70% reduction in total score if highly flagged
+        } else {
+            // Slight reduction for minor flags
+            flagPenaltyMultiplier = 1 - ((flagCount / (approvalVolume || 1)) * 0.2);
+        }
+    }
 
-    const remainingRoom = 100 - priorityBase;
-    const finalScore = priorityBase + (remainingRoom * socialScore);
+    // 4. ACTIVITY POINTS (Linear scaling)
+    // Confirms show real-world presence (highly valued). Shares are digital (lower value).
+    const activityPoints = (confirmationCount * 12) + (shareCount * 4);
 
-    return Math.round(finalScore);
+    // 5. TIME DECAY (The older the issue, the lower the score unless activity is huge)
+    const ageInHours = (Date.now() - creationTime) / (1000 * 60 * 60);
+    // Formula: e^(-0.02 * ageInHours). Halves roughly every 35 hours.
+    // Minimum decay floor is 0.4 so critical issues never drop completely to zero.
+    const timeDecayFactor = Math.max(0.4, Math.exp(-0.02 * ageInHours));
+
+    // 6. FINAL MATH
+    let rawScore = (baseScore + activityPoints) * timeDecayFactor * flagPenaltyMultiplier;
+
+    // Clamp the score strictly between 1 and 100
+    return Math.min(Math.max(Math.round(rawScore), 1), 100);
 };
 
 module.exports = calculateImpactScore;
