@@ -1,261 +1,254 @@
-    const Issue = require("../models/Issue");
-    const User = require("../models/User");
+const mongoose = require('mongoose');
+const Issue = require('../models/Issue');
+const User = require('../models/User');
+const LeaderBoard = require('../models/LeaderBoard');
 
-    // 🧠 UNIVERSAL SMART SEARCH HELPER
-    // Looks inside Title, Description, Category, and Address
-    const buildSmartQuery = (searchTerm) => {
-        if (!searchTerm) return {};
-        // Ensure searchTerm is a string to prevent regex errors
-        const term = String(searchTerm);
-        return {
-            $or: [
-                { title: { $regex: term, $options: "i" } },
-                { description: { $regex: term, $options: "i" } },
-                { category: { $regex: term, $options: "i" } },
-                { "location.address": { $regex: term, $options: "i" } }
-            ]
-        };
-    };
+/**
+ * 🤖 Helper to format issue data efficiently for the AI (Low Token Usage)
+ */
+const formatIssuesForAI = (issues) => {
+    if (!issues || issues.length === 0) return "No issues found.";
+    return issues.map(issue => ({
+        id: issue._id,
+        title: issue.title,
+        category: issue.category,
+        status: issue.status,
+        priority: issue.priority,
+        impactScore: issue.impactScore,
+        location: `${issue.location?.city || 'Unknown'}, ${issue.location?.district || 'Unknown'}`,
+        reportedAt: issue.createdAt ? issue.createdAt.toISOString().split('T')[0] : 'Unknown'
+    }));
+};
 
-    // 🛠️ STANDARD SELECTOR FOR ISSUE CARDS
-    // We use this to ensure EVERY tool returns all the fields the frontend IssueCard needs.
-    const STANDARD_ISSUE_SELECT = "title description category status createdAt media location impactScore confirmationCount isAnonymous reportedBy statusHistory";
+/**
+ * 🖥️ Helper to format FULL issue data for the Frontend UI (IssueCard)
+ * Retains images/media, full locations, and strictly masks Anonymous Users.
+ */
+const formatIssuesForUI = (issues) => {
+    if (!issues || issues.length === 0) return [];
+    return issues.map(issue => {
+        const issueObj = issue.toObject ? issue.toObject() : issue;
+        issueObj.dateOfFormation = issueObj.createdAt; // Expected by frontend
 
-    const toolHandlers = {
-
-        // 1. CIVIL SCORE (User Level)
-        getUserCivilScore: async (args, userId) => {
-            const stats = await Issue.aggregate([
-                {
-                    $match: {
-                        reportedBy: userId,
-                        isDeleted: false,
-                        status: { $ne: "REJECTED" }
-                    }
-                },
-                {
-                    $group: {
-                        _id: null,
-                        totalCivilScore: { $sum: "$impactScore" },
-                        reportsCount: { $sum: 1 }
-                    }
-                }
-            ]);
-
-            if (!stats.length) {
-                return {
-                    totalCivilScore: 0,
-                    rank: "Citizen",
-                    nextRank: "Activist",
-                    pointsToNextRank: 100,
-                    reportsToNextRank: 10
-                };
-            }
-
-            const score = stats[0].totalCivilScore;
-            let rank = "Citizen";
-            let nextRank = "Activist";
-            let pointsNeeded = 100 - score;
-
-            if (score >= 100 && score < 500) {
-                rank = "Activist"; nextRank = "Community Leader"; pointsNeeded = 500 - score;
-            } else if (score >= 500 && score < 1000) {
-                rank = "Community Leader"; nextRank = "Civic Hero"; pointsNeeded = 1000 - score;
-            } else if (score >= 1000) {
-                rank = "Civic Hero"; nextRank = "Legend"; pointsNeeded = 0;
-            }
-
-            return {
-                totalCivilScore: score,
-                totalReports: stats[0].reportsCount,
-                rank: rank,
-                nextRank: nextRank,
-                pointsToNextRank: pointsNeeded,
-                reportsToNextRank: Math.ceil(pointsNeeded / 10)
+        if (issueObj.isAnonymous) {
+            issueObj.reportedBy = {
+                name: "Anonymous Citizen",
+                userName: "active_citizen",
+                civilScore: 10,
+                issuesReported: 0,
+                issuesConfirmed: 0,
+                contact: { email: "hidden@localawaaz.in" },
+                profilePic: null,
+                isAnonymous: true
             };
-        },
+        }
+        return issueObj;
+    });
+};
 
-        // 2. IMPACT SCORE (Specific Report)
-        getIssueImpact: async (args, userId) => {
-            try {
-                const smartSearch = buildSmartQuery(args.issueTitle);
+const toolHandlers = {
 
-                const issues = await Issue.find({
-                    reportedBy: userId,
-                    isDeleted: false,
-                    ...smartSearch
-                }).select("title impactScore status confirmationCount location.city");
+    // 1. Fetch User's Own Reports
+    getUserReports: async (args, userId) => {
+        try {
+            const query = { reportedBy: userId, isDeleted: false };
 
-                if (!issues || issues.length === 0) {
-                    return `I couldn't find a report in YOUR history matching "${args.issueTitle}".`;
-                }
+            if (args.status) query.status = args.status.toUpperCase();
+            if (args.category) query.category = args.category.toUpperCase();
 
-                // Ambiguity Check
-                if (issues.length > 1) {
-                    const candidates = issues.map(i =>
-                        `- "${i.title}" (${i.status}, in ${i.location.city})`
-                    ).join("\n");
-                    return `I found multiple reports in your history matching that description. Which one?\n${candidates}`;
-                }
-
-                const issue = issues[0];
-                return {
-                    title: issue.title,
-                    impactScore: issue.impactScore,
-                    confirmations: issue.confirmationCount,
-                    status: issue.status
-                };
-            } catch (error) {
-                return "Error retrieving your report details.";
+            if (args.timeRange) {
+                const date = new Date();
+                if (args.timeRange === "TODAY") date.setDate(date.getDate() - 1);
+                else if (args.timeRange === "LAST_7_DAYS") date.setDate(date.getDate() - 7);
+                else if (args.timeRange === "LAST_30_DAYS") date.setDate(date.getDate() - 30);
+                query.createdAt = { $gte: date };
             }
-        },
-
-        // 3. USER REPORTS (My History)
-        getUserReports: async (args, userId) => {
-            let textQuery = {};
-            if (args.searchQuery) textQuery = buildSmartQuery(args.searchQuery);
-
-            // Handle "Today" filter safely
-            let dateFilter = {};
-            if (args.timeRange === "TODAY") {
-                const startOfDay = new Date();
-                startOfDay.setHours(0, 0, 0, 0);
-                dateFilter = { createdAt: { $gte: startOfDay } };
-            }
-
-            const reports = await Issue.find({
-                reportedBy: userId,
-                isDeleted: false,
-                ...textQuery,
-                ...(args.status && { status: args.status.toUpperCase() }),
-                ...dateFilter
-            })
-                .select(STANDARD_ISSUE_SELECT) // <--- FIXED: Selects all media and details
-                .sort({ _id: -1 })
-                .limit(5);
-
-            if (!reports.length) return "You haven't submitted any reports matching that description.";
-
-            // <--- FIXED: Removed the .map() that was destroying the media arrays
-            // Returning the raw documents ensures the frontend IssueCard gets everything
-            return reports;
-        },
-
-        // 4. PUBLIC ISSUES (City/Locality Search)
-        getPublicCivicIssues: async (args) => {
-            const query = {
-                isPublic: true,
-                isDeleted: false
-            };
-
-            if (args.city) {
-                query['location.city'] = { $regex: args.city, $options: "i" };
-            }
-
-            if (args.searchQuery) {
-                const smartSearch = buildSmartQuery(args.searchQuery);
-                query.$or = smartSearch.$or;
-            }
-
-            let sortOption = { createdAt: -1 };
-            if (args.sortBy === 'IMPACT') sortOption = { impactScore: -1 };
-            else if (args.sortBy === 'SUPPORT') sortOption = { confirmationCount: -1 };
 
             const issues = await Issue.find(query)
-                .select(STANDARD_ISSUE_SELECT) // <--- FIXED: Standardized selection
-                .sort(sortOption)
-                .limit(5);
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .populate('reportedBy', 'name userName profilePic civilScore contact.email isAnonymous');
 
-            if (!issues.length) return `No public issues found in ${args.city || "this area"}.`;
+            if (!issues || issues.length === 0) return "You haven't posted any issues matching this criteria.";
 
-            return issues;
-        },
+            return {
+                uiData: formatIssuesForUI(issues),
+                aiData: JSON.stringify(formatIssuesForAI(issues))
+            };
+        } catch (error) {
+            console.error("getUserReports error:", error);
+            return "Failed to fetch user reports.";
+        }
+    },
 
-        // 5. ISSUE STATS (For checking specific public issues)
-        getIssueStats: async (args, userId) => {
-            try {
-                console.log(`[LokAI] 🔍 Smart-Searching for: "${args.issueTitle}"`);
+    // 2. Search Public Issues
+    getPublicCivicIssues: async (args) => {
+        try {
+            const query = { isPublic: true, isDeleted: false };
 
-                const query = {
-                    isDeleted: false,
-                    isPublic: true,
-                    ...buildSmartQuery(args.issueTitle)
-                };
+            if (args.city) query['location.city'] = { $regex: new RegExp(`^${args.city}$`, 'i') };
+            if (args.status) query.status = args.status.toUpperCase();
+            if (args.category) query.category = args.category.toUpperCase();
 
-                const issues = await Issue.find(query)
-                    .select("title description category status confirmations flags location.address location.city")
-                    .limit(3);
-
-                if (!issues || issues.length === 0) {
-                    return `I couldn't find any public reports matching "${args.issueTitle}".`;
-                }
-
-                if (issues.length > 1) {
-                    const candidates = issues.map(i =>
-                        `- "${i.title}" (${i.status}, near ${i.location.address}, ${i.location.city})`
-                    ).join("\n");
-                    return `I found multiple issues matching that description. Which one did you mean?\n${candidates}`;
-                }
-
-                const issue = issues[0];
-                return JSON.stringify({
-                    foundMatch: true,
-                    title: issue.title,
-                    confirmations: issue.confirmations ? issue.confirmations.length : 0,
-                    flags: issue.flags ? issue.flags.length : 0,
-                    status: issue.status,
-                    category: issue.category,
-                    snippet: issue.description.substring(0, 100) + "..."
-                });
-
-            } catch (error) {
-                console.error("Tool Error (getIssueStats):", error);
-                return `System Error: ${error.message}`;
+            if (args.searchQuery) {
+                query.$text = { $search: args.searchQuery };
             }
-        },
 
-        // 6. CITY TRENDS
-        getCityTrends: async (args) => {
-            return await Issue.aggregate([
-                {
-                    $match: {
-                        'location.city': { $regex: args.city, $options: "i" },
-                        isDeleted: false
-                    }
-                },
-                { $group: { _id: "$category", count: { $sum: 1 } } },
-                { $sort: { count: -1 } },
-                { $limit: 3 }
-            ]);
-        },
+            let sortLogic = { createdAt: -1 }; // NEWEST default
+            if (args.sortBy === "IMPACT") sortLogic = { impactScore: -1 };
+            if (args.sortBy === "SUPPORT") sortLogic = { confirmationCount: -1 };
 
-        // 7. ISSUES NEARBY
-        getIssuesNearMe: async (args, userId) => {
-            const { lat, lng, radius = 2000 } = args;
-            return await Issue.find({
-                "location.geoData": {
-                    $nearSphere: {
-                        $geometry: { type: "Point", coordinates: [parseFloat(lng), parseFloat(lat)] },
-                        $maxDistance: radius
-                    }
-                },
+            const issues = await Issue.find(query)
+                .sort(sortLogic)
+                .limit(10)
+                .populate('reportedBy', 'name userName profilePic civilScore contact.email isAnonymous');
+
+            if (!issues || issues.length === 0) return "No public issues found for this criteria.";
+
+            return {
+                uiData: formatIssuesForUI(issues),
+                aiData: JSON.stringify(formatIssuesForAI(issues))
+            };
+        } catch (error) {
+            console.error("getPublicCivicIssues error:", error);
+            return "Failed to fetch public issues.";
+        }
+    },
+
+    // 3. Get User Civil Score & Rank
+    getUserCivilScore: async (args, userId) => {
+        try {
+            const user = await User.findById(userId).select('name rank civilScore issuesReported issuesConfirmed issuesFlagged accountStatus');
+            if (!user) return "User profile not found.";
+
+            return JSON.stringify({
+                name: user.name,
+                rank: user.rank,
+                civilScore: user.civilScore,
+                stats: { reported: user.issuesReported, confirmed: user.issuesConfirmed, flagged: user.issuesFlagged },
+                status: user.accountStatus
+            });
+        } catch (error) {
+            return "Failed to fetch civil score.";
+        }
+    },
+
+    // 4. Get Current Leaderboard
+    getCurrentLeaderboard: async () => {
+        try {
+            const board = await LeaderBoard.findOne({ type: 'WEEKLY' })
+                .sort({ createdAt: -1 })
+                .populate('citizens.userId', 'name profilePic rank civilScore issuesReported')
+                .populate('authorities.userId', 'name profilePic authorityProfile.departmentName authorityProfile.csiScore');
+
+            if (!board) return JSON.stringify({ message: "No active weekly leaderboard found." });
+
+            const topCitizens = board.citizens.slice(0, 5).map(c => ({
+                rank: c.rank, name: c.userId?.name || "Unknown", title: c.userId?.rank || "Citizen", score: c.csi, profilePic: c.userId?.profilePic || null
+            }));
+            const topAuthorities = board.authorities.slice(0, 5).map(a => ({
+                rank: a.rank, name: a.userId?.name || "Unknown", department: a.userId?.authorityProfile?.departmentName || "Official", score: a.csi, profilePic: a.userId?.profilePic || null
+            }));
+
+            return JSON.stringify({ period: "Current Week", topCitizens, topAuthorities });
+        } catch (error) {
+            return "Failed to fetch the leaderboard.";
+        }
+    },
+
+    // 5. Get Saved Issues
+    getSavedIssues: async (args, userId) => {
+        try {
+            const user = await User.findById(userId).populate({
+                path: 'savedIssues',
+                match: { isDeleted: false },
+                populate: { path: 'reportedBy', select: 'name userName profilePic civilScore contact.email isAnonymous' },
+                options: { limit: 10 }
+            });
+
+            if (!user || !user.savedIssues || user.savedIssues.length === 0) return "You have no saved issues.";
+
+            return {
+                uiData: formatIssuesForUI(user.savedIssues),
+                aiData: JSON.stringify(formatIssuesForAI(user.savedIssues))
+            };
+        } catch (error) {
+            return "Failed to fetch saved issues.";
+        }
+    },
+
+    // 6. Get Confirmed Issues
+    getConfirmedIssues: async (args, userId) => {
+        try {
+            const issues = await Issue.find({
+                'confirmations.user': userId,
+                reportedBy: { $ne: userId },
+                isDeleted: false
+            })
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .populate('reportedBy', 'name userName profilePic civilScore contact.email isAnonymous');
+
+            if (!issues || issues.length === 0) return "You haven't confirmed any community issues yet.";
+
+            return {
+                uiData: formatIssuesForUI(issues),
+                aiData: JSON.stringify(formatIssuesForAI(issues))
+            };
+        } catch (error) {
+            return "Failed to fetch confirmed issues.";
+        }
+    },
+
+    // 7. Get Issues Near GPS Coordinates
+    getIssuesNearMe: async (args, userId) => {
+        try {
+            if (!args.lat || !args.lng) return "GPS coordinates are missing.";
+            const radiusInMeters = args.radius || 3000;
+
+            const issues = await Issue.find({
                 isDeleted: false,
                 isPublic: true,
-                status: { $ne: "REJECTED" }
+                'location.geoData': {
+                    $near: {
+                        $geometry: { type: "Point", coordinates: [parseFloat(args.lng), parseFloat(args.lat)] },
+                        $maxDistance: radiusInMeters
+                    }
+                }
             })
                 .limit(10)
-                .select(STANDARD_ISSUE_SELECT); // <--- FIXED: Standardized selection
-        },
+                .populate('reportedBy', 'name userName profilePic civilScore contact.email isAnonymous');
 
-        // 8. LEADERBOARD
-        getCityLeaderboard: async (args) => {
-            return await User.aggregate([
-                { $match: { "contact.city": new RegExp(args.city, "i"), role: "user" } },
-                { $project: { name: 1, civilScore: 1, rank: 1, profilePic: 1 } },
-                { $sort: { civilScore: -1 } },
-                { $limit: 10 }
-            ]);
+            if (!issues || issues.length === 0) return "No issues found nearby.";
+
+            return {
+                uiData: formatIssuesForUI(issues),
+                aiData: JSON.stringify(formatIssuesForAI(issues))
+            };
+        } catch (error) {
+            return "Failed to fetch nearby issues.";
         }
-    };
+    },
 
-    module.exports = toolHandlers;
+    // 8. Get specific issue stats
+    getIssueStats: async (args) => {
+        try {
+            const query = args.issueTitle ? { $text: { $search: args.issueTitle }, isDeleted: false } : null;
+            if (!query) return "Issue title required.";
+
+            const issue = await Issue.findOne(query).select('title status confirmationCount shareCount impactScore flagCount workCycle.finalVerdict bidding.winningBid');
+            if (!issue) return "Issue not found.";
+
+            return JSON.stringify({
+                title: issue.title, status: issue.status, impactScore: issue.impactScore,
+                confirmations: issue.confirmationCount, shares: issue.shareCount, flags: issue.flagCount,
+                isAssigned: !!issue.bidding?.winningBid?.authorityId,
+                communityVerdict: issue.workCycle?.finalVerdict || "PENDING"
+            });
+        } catch (error) {
+            return "Failed to fetch issue stats.";
+        }
+    }
+};
+
+module.exports = toolHandlers;

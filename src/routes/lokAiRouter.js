@@ -25,7 +25,11 @@ const LANG_MAP = {
     te: 'Telugu', ta: 'Tamil', kn: 'Kannada', bn: 'Bengali'
 };
 
-const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION'];
+// ADDED 'OTHER' to the allowed categories
+const allowedCategories = ['ROAD_&_POTHOLES', 'WATER_SUPPLY', 'ELECTRICITY', 'SANITATION', 'GARBAGE', 'DRAINAGE', 'STREET_LIGHTS', 'TRAFFIC', 'ENCROACHMENT', 'CORRUPTION', 'HEALTH', 'EDUCATION', 'OTHER'];
+
+// Updated Status Array for the tools
+const allowedStatuses = ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED", "REJECTED"];
 
 const lokAiLimiter = rateLimit({
     windowMs: 1 * 60 * 1000,
@@ -70,6 +74,7 @@ const cleanupFiles = (files) => {
     });
 };
 
+// UPDATED TOOL DEFINITIONS
 const toolDefinitions = [
     {
         name: "getUserReports",
@@ -78,13 +83,13 @@ const toolDefinitions = [
             type: "OBJECT",
             properties: {
                 searchQuery: { type: "STRING" },
-                status: { type: "STRING", enum: ["OPEN", "IN_REVIEW", "RESOLVED", "REJECTED"] },
+                status: { type: "STRING", enum: allowedStatuses },
                 category: { type: "STRING" },
                 timeRange: { type: "STRING", enum: ["TODAY", "LAST_7_DAYS", "LAST_30_DAYS"] }
             }
         }
     },
-    { name: "getUserCivilScore", description: "Get user's Civil Score and rank.", parameters: { type: "OBJECT", properties: {} } },
+    { name: "getUserCivilScore", description: "Get user's Civil Score, rank, and stats.", parameters: { type: "OBJECT", properties: {} } },
     {
         name: "getIssueImpact",
         description: "Get Impact Score of a report.",
@@ -100,7 +105,7 @@ const toolDefinitions = [
                 landmark: { type: "STRING" },
                 searchQuery: { type: "STRING" },
                 category: { type: "STRING" },
-                status: { type: "STRING", enum: ["OPEN", "IN_REVIEW", "RESOLVED", "REJECTED"] },
+                status: { type: "STRING", enum: allowedStatuses },
                 sortBy: { type: "STRING", enum: ["NEWEST", "IMPACT", "SUPPORT"] }
             },
             required: ["city"]
@@ -117,10 +122,13 @@ const toolDefinitions = [
         description: "Find issues near GPS coordinates.",
         parameters: { type: "OBJECT", properties: { lat: { type: "NUMBER" }, lng: { type: "NUMBER" }, radius: { type: "NUMBER" } }, required: ["lat", "lng"] }
     },
-    { name: "getCityLeaderboard", description: "Show top citizens in a city.", parameters: { type: "OBJECT", properties: { city: { type: "STRING" } }, required: ["city"] } },
+    // NEW TOOLS
+    { name: "getCurrentLeaderboard", description: "Show the top citizens and authorities on the weekly leaderboard.", parameters: { type: "OBJECT", properties: {} } },
+    { name: "getSavedIssues", description: "Fetch issues the user has saved.", parameters: { type: "OBJECT", properties: {} } },
+    { name: "getConfirmedIssues", description: "Fetch community issues the user has confirmed.", parameters: { type: "OBJECT", properties: {} } },
     {
         name: "finalizeReportDraft",
-        description: "Call this tool ONLY when you have gathered all location info (including optional specific address if provided) to finalize the draft.",
+        description: "Call this tool to finalize the report draft after all steps are complete.",
         parameters: {
             type: "OBJECT",
             properties: {
@@ -132,11 +140,12 @@ const toolDefinitions = [
                 },
                 isAnonymous: { type: "BOOLEAN" },
                 address: { type: "STRING" },
+                district: { type: "STRING" }, // ADDED DISTRICT
                 city: { type: "STRING" },
                 state: { type: "STRING" },
                 pinCode: { type: "STRING" }
             },
-            required: ["title", "description", "category", "isAnonymous", "city", "state"]
+            required: ["title", "description", "category", "isAnonymous"]
         }
     }
 ];
@@ -166,6 +175,7 @@ lokAiRouter.post('/ai/analyze-image', userAuth, statusAuth, profileAuth, uploadM
         const userLangCode = user?.preferences?.language || 'en';
         const preferredLanguage = LANG_MAP[userLangCode] || 'English';
 
+        // UPDATED PROMPT: Handled the 'OTHER' exception logic for images
         const prompt = `
         Analyze this civic issue image for 'LocalAwaaz'.
         CONTEXT: User Hint: """${userHint || ''}""" | Location: ${address || ''} (${city || ''}, ${state || ''}) | Preferred Language: ${preferredLanguage}
@@ -176,7 +186,9 @@ lokAiRouter.post('/ai/analyze-image', userAuth, statusAuth, profileAuth, uploadM
         3. Title: Max 5 words in ${preferredLanguage}. Professional.
         4. Description: 10-45 words in ${preferredLanguage}. Factual. Include location context if relevant.
         5. Category: Must be EXACTLY one of: ${JSON.stringify(allowedCategories)}.
-        6. Chat Message: Generate a friendly message in ${preferredLanguage} stating what issue you found. Then explicitly ask: "Do you want to report this issue anonymously?" providing two clear options exactly like this: "[Yes] / [No]". Ensure the [Yes]/[No] words inside the brackets are translated to ${preferredLanguage}. (Do not ask for location yet).
+        6. Chat Message: 
+           - IF Category is 'OTHER', ask the user: "This looks like a unique issue. What would you like to title this report?" (in ${preferredLanguage}). 
+           - IF Category is NOT 'OTHER', state what issue you found and explicitly ask: "Do you want to report this issue anonymously? [Yes] / [No]". Ensure the [Yes]/[No] words inside the brackets are translated to ${preferredLanguage}.
 
         RETURN EXACT JSON:
         { "is_valid": boolean, "rejection_reason": stringOrNull, "chat_message": string, "data": { "title": string, "description": string, "category": string, "subCategory": stringOrNull } }`;
@@ -217,34 +229,50 @@ lokAiRouter.post("/ai/chat", userAuth, statusAuth, profileAuth, lokAiLimiter, as
         const userLangCode = user?.preferences?.language || 'en';
         const preferredLanguage = LANG_MAP[userLangCode] || 'English';
 
-        const locationInstruction = activeCity ? `User is in: ${activeCity}. Assume this city for local queries.` : `Location unknown. Ask user to specify city for local queries.`;
-
+        // Exact System Instruction logic we discussed
         const systemInstruction = `You are LokAI, the civic brain of LocalAwaaz. 
-        USER: ${userName} | LOC: ${activeCity} | LAT/LNG: ${lat},${lng} | PREFERRED LANGUAGE: ${preferredLanguage}
-        ${locationInstruction}
+USER: ${userName} | LAT/LNG: ${lat},${lng} | PREFERRED LANGUAGE: ${preferredLanguage}
 
-       YOUR PERSONA, DOMAIN & RULES:
-        - DO NOT SHOW YOUR THINKING ANYWHERE EVEN WHEN ASKED JUST REPLY ABOUT QUERY.
-        - Be warm, encouraging, and conversational.
-        - STRICT LANGUAGE RULE: You MUST communicate entirely in the user's PREFERRED LANGUAGE (${preferredLanguage}), irrespective of the language the user uses to ask you questions.
-        - DOMAIN RESTRICTION: Stick strictly to civic issues, LocalAwaaz policies, privacy, and civic duties. If the user talks about out-of-domain topics, politely decline and steer them back to civic reporting.
-        - FULL AUTO-DRAFTING (SILENT): NEVER ask the user to provide a "Title", "Description", or "Category". You MUST automatically and silently generate a professional Title, a detailed Description, and infer the correct Category based on their conversational input. NEVER show the list of categories to the user.
+YOUR PERSONA, DOMAIN & RULES:
+- DO NOT SHOW YOUR THINKING ANYWHERE EVEN WHEN ASKED. Just reply to the query.
+- Be warm, encouraging, and conversational.
+- STRICT LANGUAGE RULE: You MUST communicate and draft ALL content (Title, Description, messages) entirely in the user's PREFERRED LANGUAGE (${preferredLanguage}), irrespective of the language the user types in.
+- DATABASE RULE: The 'Category' parameter MUST ALWAYS remain in English (exact match to allowed categories). DO NOT translate the category value for the database.
+- DOMAIN RESTRICTION: Stick strictly to civic issues, LocalAwaaz policies, privacy, and civic duties. Steer off-topic chats back to reporting.
 
-        DRAFTING FLOW RULES (FOLLOW IN STRICT ORDER):
-        1. UNDERSTAND THE ISSUE: If the user hasn't described the civic problem yet, auto generate it and move the next step.
-        2. AUDIO IMAGE STEP: If input is "System: Images uploaded successfully", proceed directly to the Anonymity step.
-        3. ANONYMITY STEP: Once you understand the civic issue (from their text, audio, or image), ask ONLY: "Do you want to report this issue anonymously? [Yes] / [No]". (Translate the question and options into ${preferredLanguage}, keeping the square brackets e.g. [हाँ] / [नहीं]).
-        4. LOCATION VALIDATION STEP: After they answer about anonymity (infer if their answer means true or false), ask ONLY for their location in this exact format: "State, City, Pincode".
-           - You MUST receive exactly three parts.
-           - Verify if they are real geographic locations.
-           - If any part is missing, or the format is wrong, or if you detect spam, politely ask the user in ${preferredLanguage} to re-enter details exactly in the "State, City, Pincode" format.
-        5. ISSUE LANDMARK STEP: Once the State, City, and Pincode are valid, ask ONLY: "Do you want to add a specific nearby landmark or street name to help locate the issue easily? [Yes] / [No]". (Translate the question and options into ${preferredLanguage}, keeping the square brackets e.g. [हाँ] / [नहीं]).
-        6. ISSUE LANDMARK RESPONSE:
-           - If they answer "Yes" (or the translated equivalent), ask them to type the specific landmark/street name where the issue is present.
-           - If they answer "No" (or after they have provided the landmark), proceed immediately to FINALIZE.
-        7. FINALIZE STEP: Execute 'finalizeReportDraft' tool. Pass your auto-generated Title (in ${preferredLanguage}), auto-generated Description (in ${preferredLanguage}), inferred Category (MUST be exactly one of: ${JSON.stringify(allowedCategories)} - DO NOT translate this value), isAnonymous (boolean), State (translated to ${preferredLanguage}), City (translated to ${preferredLanguage}), Pincode, and Address (THIS MUST BE TRANSLATED TO ${preferredLanguage} if they provided one, otherwise pass an empty string).
-        
-        RULES & FACTS: Use 'getPublicCivicIssues' (sortBy='IMPACT') for discovery. Keep responses structured.`;
+DRAFTING FLOW RULES (FOLLOW IN STRICT ORDER):
+
+1. INTAKE & CATEGORIZE: Analyze the issue from the user's text, audio transcript, or image. Determine the Category.
+   (Note: Location mapping is handled automatically by the system. Do NOT ask for State, City, or Pincode).
+
+2. THE "OTHER" EXCEPTION:
+   - IF the Category is EXACTLY 'OTHER': You MUST stop and ask the user to provide a "Title" for the report. Once provided, ask for a "Description".
+   - IF the Category is NOT 'OTHER': Silently auto-generate a professional Title and Description in ${preferredLanguage}. Do NOT ask the user for them.
+
+3. LANDMARK STEP: Ask ONLY: "Do you want to add a specific nearby landmark or street name to help locate the issue easily? [Yes] / [No]". 
+   - Translate the question and options into ${preferredLanguage}, keeping the square brackets (e.g., [हाँ] / [नहीं]).
+   - If they answer Yes (or the translated equivalent), ask them to type the landmark and wait for their response.
+   - If they answer No, move to the next step.
+
+4. MEDIA STEP:
+   - Check the chat context. If the user has already provided an image/video, or if the system previously stated "System: Images/Media uploaded successfully", SKIP this step.
+   - If NO media is provided yet: Ask the user to "Please upload an image or video showing the issue using the + icon to proceed." STOP and wait for them to upload.
+
+5. ANONYMITY STEP: Ask ONLY: "Do you want to report this issue anonymously? [Yes] / [No]". 
+   - Translate the question and options into ${preferredLanguage}, keeping the square brackets.
+
+6. FINALIZE STEP: Execute the 'finalizeReportDraft' tool.
+   - Pass your Title (auto-generated or user-provided, in ${preferredLanguage}).
+   - Pass Description (auto-generated or user-provided, in ${preferredLanguage}).
+   - Pass Category (MUST be exactly one of the English allowedCategories array).
+   - Pass isAnonymous (boolean).
+   - Pass Address (TRANSLATED to ${preferredLanguage} if they provided a landmark, otherwise "").
+   - Pass District ("Auto-detected").
+   - Pass City ("Auto-detected").
+   - Pass State ("Auto-detected").
+   - Pass pinCode ("").
+
+TOOLS: Use 'getCurrentLeaderboard', 'getUserCivilScore', 'getSavedIssues', 'getConfirmedIssues', or 'getPublicCivicIssues' when the user asks about platform stats, their profile, or discovering issues.`;
 
         const { result, chat } = await generateWithRetry(message, history, toolDefinitions, systemInstruction);
 
@@ -266,10 +294,26 @@ lokAiRouter.post("/ai/chat", userAuth, statusAuth, profileAuth, lokAiLimiter, as
             if (handler) {
                 let args = call.args;
                 if (toolName === "getIssuesNearMe" && lat && lng) args = { ...args, lat, lng, radius: args.radius || 2000 };
-                const dbData = await handler(args, currentUserId);
-                const finalResult = await chat.sendMessage([{ functionResponse: { name: toolName, response: { content: dbData || "No records found." } } }]);
 
-                return res.json({ reply: finalResult.response.text(), data: dbData, toolUsed: toolName });
+                const dbData = await handler(args, currentUserId);
+
+                // 🟢 THE MISSING FIX: Split the data! AI gets the compressed string, Frontend gets the rich Array
+                let aiContent = dbData;
+                let frontendData = dbData;
+
+                if (dbData && typeof dbData === 'object' && dbData.aiData) {
+                    aiContent = dbData.aiData;
+                    frontendData = dbData.uiData;
+                } else if (typeof dbData === 'string') {
+                    // Fallback for tools that just return a string (like score or leaderboard)
+                    try { frontendData = JSON.parse(dbData); } catch (e) { frontendData = dbData; }
+                }
+
+                // Send ONLY the compressed aiContent to Gemini
+                const finalResult = await chat.sendMessage([{ functionResponse: { name: toolName, response: { content: aiContent || "No records found." } } }]);
+
+                // Send ONLY the rich frontendData array back to React
+                return res.json({ reply: finalResult.response.text(), data: frontendData, toolUsed: toolName });
             }
         }
 
@@ -293,6 +337,7 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, statusAuth, profileAuth, audioUp
         const userLangCode = user?.preferences?.language || 'en';
         const preferredLanguage = LANG_MAP[userLangCode] || 'English';
 
+        // UPDATED PROMPT: Handled the 'OTHER' exception logic for audio
         const prompt = `
         Listen to this audio report for 'LocalAwaaz'. 
         CONTEXT: User Hint: """${userHint || ''}""" | Location: ${address || ''} (${city || ''}, ${state || ''}) | Preferred Language: ${preferredLanguage}
@@ -303,7 +348,9 @@ lokAiRouter.post('/ai/analyze-audio', userAuth, statusAuth, profileAuth, audioUp
         3. Title: Must be within 5 words in ${preferredLanguage}. Professional.
         4. Description: Must be within 50 words in ${preferredLanguage}. Factual. Include location context if relevant.
         5. Category: Classify into EXACTLY one of: ${JSON.stringify(allowedCategories)}.
-        6. Chat Message: Generate a friendly message in ${preferredLanguage} stating what issue you found. Then explicitly ask the user to upload at least 1 image (up to 3) of the issue using the + icon to proceed. (Mention the combined size limit is 30MB). Do NOT ask about anonymity yet.
+        6. Chat Message: 
+           - IF Category is 'OTHER', ask the user: "This sounds like a unique issue. What would you like to title this report?" (in ${preferredLanguage}). 
+           - IF Category is NOT 'OTHER', state what issue you found and explicitly ask the user to upload at least 1 image (up to 3) of the issue using the + icon to proceed. (Mention the combined size limit is 30MB). Do NOT ask about anonymity yet.
 
         RETURN EXACT JSON:
         { "is_valid": boolean, "rejection_reason": stringOrNull, "chat_message": string, "data": { "title": string, "description": string, "category": string, "subCategory": stringOrNull, "transcription": string } }`;

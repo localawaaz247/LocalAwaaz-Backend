@@ -2056,4 +2056,98 @@ adminRouter.patch('/admin/issue/:id/extension', userAuth, adminAuth, async (req,
     }
 });
 
+adminRouter.patch('/admin/issue/:id/force-reject', userAuth, adminAuth, async (req, res) => {
+    try {
+        const issueId = req.params.id;
+        const { reason } = req.body;
+
+        if (!mongoose.Types.ObjectId.isValid(issueId)) {
+            return res.status(400).json({ success: false, message: "Invalid Issue ID" });
+        }
+
+        const issue = await Issue.findById(issueId);
+        if (!issue) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        // 1. Prepare updates for status and tracking logs
+        const updateData = {
+            status: 'REJECTED',
+            adminRemark: reason || "Rejected by Admin"
+        };
+
+        const pushData = {
+            statusHistory: {
+                status: 'REJECTED',
+                changedBy: req.userId,
+                remark: `Force Rejected by Admin: ${reason || "No reason provided."}`
+            },
+            auditLog: {
+                action: 'FORCE_REJECTED',
+                performedBy: req.userId,
+                details: `Admin forcefully rejected the issue. Reason: ${reason || 'N/A'}`
+            }
+        };
+
+        // 2. Execute the update
+        const updatedIssue = await Issue.findByIdAndUpdate(
+            issueId,
+            { $set: updateData, $push: pushData },
+            { new: true }
+        );
+
+        // 3. Notify the relevant parties
+        const io = req.app.get('io');
+        const recipients = new Set();
+
+        // Add the original citizen who reported it
+        if (updatedIssue.reportedBy) {
+            recipients.add(updatedIssue.reportedBy.toString());
+        }
+        // If an authority was actively working on it, notify them too
+        if (updatedIssue.bidding?.winningBid?.authorityId) {
+            recipients.add(updatedIssue.bidding.winningBid.authorityId.toString());
+        }
+
+        const rejectionMessage = `The issue "${updatedIssue.title}" has been rejected by the Administration. Reason: ${reason || 'Violation of platform guidelines.'}`;
+
+        Array.from(recipients).forEach(targetUserId => {
+            triggerNotification({
+                recipientId: targetUserId,
+                senderId: req.userId,
+                issueId: updatedIssue._id,
+                type: 'ISSUE_REJECTED',
+                message: rejectionMessage,
+                io: io
+            }).catch(err => console.error("Rejection notification error:", err));
+        });
+
+        // 4. Real-time DOM updates
+        if (io) {
+            io.emit('issue_status_updated', {
+                issueId: updatedIssue._id,
+                newStatus: 'REJECTED'
+            });
+            io.emit('issue_updated', {
+                issueId: updatedIssue._id,
+                updatedData: updatedIssue
+            });
+            io.emit('global_feed_refresh');
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Issue forcefully rejected",
+            data: updatedIssue
+        });
+
+    } catch (err) {
+        console.error("Error force rejecting issue:", err);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to force reject the issue"
+        });
+    }
+});
+
 module.exports = adminRouter

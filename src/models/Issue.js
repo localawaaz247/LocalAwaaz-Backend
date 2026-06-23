@@ -92,7 +92,7 @@ const issueModel = new mongoose.Schema({
     },
     status: {
         type: String,
-        enum: ["OPEN", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
+        enum: ["OPEN", "REJECTED", "LOCKED", "PENDING_EXTENSION", "AWAITING_HANDOVER", "RESOLVED", "FAILED", "DISPUTED", "RELEASED", "ORPHANED"],
         default: "OPEN",
         required: true,
         index: true
