@@ -3,10 +3,10 @@ const contactRouter = express.Router();
 const rateLimit = require('express-rate-limit');
 const Inquiry = require('../models/Inquiry');
 const validator = require('validator');
+
 // --- SPAM PROTECTION CONFIGURATION ---
-// Allow only 5 messages from the same IP every 1 hour
 const contactLimiter = rateLimit({
-    windowMs: 60 * 60 * 1000, // 1 hour in milliseconds
+    windowMs: 60 * 60 * 1000, // 1 hour
     max: 5,
     message: {
         success: false,
@@ -16,39 +16,71 @@ const contactLimiter = rateLimit({
     legacyHeaders: false,
 });
 
-contactRouter.post('/inquiry', contactLimiter, async (req, res) => {
+// --- VALIDATION & SANITIZATION MIDDLEWARE ---
+const sanitizeAndValidateInquiry = (req, res, next) => {
     const { name, email, message } = req.body;
 
-    // 1. Basic Validation
-    if (!name || !email || !message) {
-        return res.status(400).json({ success: false, msg: 'Please enter all fields' });
+    // 1. Prevent NoSQL Injection: Ensure inputs are strictly strings
+    if (typeof name !== 'string' || typeof email !== 'string' || typeof message !== 'string') {
+        return res.status(400).json({ success: false, message: "Invalid input data type format" });
     }
-    if (name.trim().length < 3) {
-        return res.status(400).json({ success: false, message: "Name must be atleast 3 chars" });
+
+    // 2. Trim whitespace
+    const cleanName = name.trim();
+    const cleanEmail = email.trim();
+    const cleanMessage = message.trim();
+
+    // 3. Basic Validation Checks
+    if (!cleanName || !cleanEmail || !cleanMessage) {
+        return res.status(400).json({ success: false, message: 'Please enter all fields' });
     }
-    if (!validator.isEmail(email)) {
+
+    // Prevent extremely long string payloads (Denial of Service protection)
+    if (cleanName.length < 3 || cleanName.length > 50) {
+        return res.status(400).json({ success: false, message: "Name must be between 3 and 50 chars" });
+    }
+
+    if (!validator.isEmail(cleanEmail)) {
         return res.status(400).json({ success: false, message: "Enter valid email id" });
     }
-    const wordCount = message.trim().split(/\s+/).length
+
+    const wordCount = cleanMessage.split(/\s+/).length;
     if (wordCount > 50) {
         return res.status(400).json({ success: false, message: "Message is too long (max 50 words)!!" });
     }
+
+    // 4. Sanitize against XSS (Escape HTML/Scripts)
+    // validator.escape() converts <, >, &, ', ", and / to HTML entities.
+    req.body.name = validator.escape(cleanName);
+    req.body.email = validator.normalizeEmail(cleanEmail);
+    req.body.message = validator.escape(cleanMessage);
+
+    // Pass the sanitized data to the next function
+    next();
+};
+
+// --- ROUTE HANDLER ---
+// Notice how the custom middleware sits right after the rate limiter
+contactRouter.post('/inquiry', contactLimiter, sanitizeAndValidateInquiry, async (req, res) => {
+    // req.body is now strictly strings, trimmed, validated, and HTML-escaped.
+    const { name, email, message } = req.body;
+
     try {
-        // 2. Create new Inquiry object
+        // Create new Inquiry object
         const newInquiry = new Inquiry({
-            name: name.trim(),
+            name,
             email,
-            message: message.trim()
+            message
         });
 
-        // 3. Save to Database
+        // Save to Database
         await newInquiry.save();
 
         res.status(200).json({ success: true, message: 'Message sent successfully!' });
 
     } catch (err) {
         console.error(err.message);
-        res.status(500).json({ success: false, message: "Server Error" })
+        res.status(500).json({ success: false, message: "Server Error" });
     }
 });
 
