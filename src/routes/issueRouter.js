@@ -1048,8 +1048,4 @@ issueRouter.get('/issue/:id/verify/presign', userAuth, statusAuth, profileAuth, 
     }
 });
 
-
-
-
-
 module.exports = issueRouter;

@@ -733,4 +733,76 @@ authorityRouter.post('/authority/radar/revert/:issueId', userAuth, authorityAuth
     }
 });
 
+
+authorityRouter.post('/authority/issues/:issueId/release', userAuth, authorityAuth, async (req, res) => {
+    try {
+        const { reason } = req.body;
+        const authorityId = req.authorityUser._id;
+        const issueId = req.params.issueId;
+
+        const issue = await Issue.findById(issueId);
+        if (!issue || !['LOCKED', 'PENDING_EXTENSION'].includes(issue.status)) {
+            return res.status(400).json({ success: false, message: "Only active jobs can be released." });
+        }
+
+        if (issue.bidding.winningBid.authorityId.toString() !== authorityId.toString()) {
+            return res.status(403).json({ success: false, message: "Unauthorized. You do not own this job." });
+        }
+
+        if (!reason) {
+            return res.status(400).json({ success: false, message: "A reason for release is required." });
+        }
+
+        // Drop the issue back to the open market
+        issue.status = 'OPEN';
+        issue.workCycle.releaseApology = reason;
+
+        // Reset Bidding & Timers so someone else can pick it up
+        issue.bidding = { auctionStartsAt: null, auctionEndsAt: null, bids: [], winningBid: null };
+        issue.workCycle.commitmentDeadline = null;
+        issue.workCycle.ghostTimerExpiresAt = null;
+        issue.workCycle.isClockPaused = false;
+
+        issue.statusHistory.push({ status: 'OPEN', changedBy: authorityId, remark: `Job released by official. Reason: ${reason}` });
+        issue.auditLog.push({ action: 'JOB_RELEASED', performedBy: authorityId, details: reason });
+
+        await issue.save();
+
+        // Broadcast to sockets and send notifications
+        const io = req.app.get('io');
+        if (io) {
+            triggerNotification({
+                recipientId: issue.reportedBy,
+                senderId: authorityId,
+                issueId: issue._id,
+                type: 'UPDATE',
+                message: `The official assigned to "${issue.title}" has released the job back to the open market. Reason: ${reason}`,
+                io
+            });
+            io.emit('issue_status_updated', {
+                issueId: issue._id,
+                newStatus: 'OPEN'
+            });
+            io.emit('issue_updated', {
+                issueId: issue._id,
+                updatedData: issue
+            });
+        }
+
+        // Update Official's profile metrics (decrement active, increment released)
+        await User.findByIdAndUpdate(authorityId, {
+            $inc: {
+                'authorityProfile.activeJobsCount': -1,
+                'authorityProfile.jobsReleased': 1
+            }
+        });
+
+        return res.status(200).json({ success: true, message: "Job successfully released to the open market." });
+
+    } catch (err) {
+        console.error("Release Error:", err);
+        return res.status(500).json({ success: false, message: "Server error while releasing the job." });
+    }
+});
+
 module.exports = authorityRouter;
