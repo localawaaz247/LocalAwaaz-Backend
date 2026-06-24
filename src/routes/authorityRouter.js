@@ -147,6 +147,31 @@ authorityRouter.get('/authority/analytics/summary', userAuth, authorityAuth, asy
     }
 });
 
+// 🔍 GET: Fetch Single Issue Details for Authority Modal
+authorityRouter.get('/authority/issue/:issueId', userAuth, authorityAuth, async (req, res) => {
+    try {
+        const { issueId } = req.params;
+
+        // Fetch and populate the reporter and the assigned official
+        const issue = await Issue.findById(issueId)
+            .populate('reportedBy', 'name role')
+            .populate('bidding.winningBid.authorityId', 'name authorityProfile');
+
+        if (!issue) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            data: issue
+        });
+
+    } catch (err) {
+        console.error("Fetch Single Issue Error:", err);
+        return res.status(500).json({ success: false, message: "Server error fetching issue details." });
+    }
+});
+
 // 📋 GET: Localized Issues Feed
 authorityRouter.get('/authority/issues', userAuth, authorityAuth, async (req, res) => {
     try {
@@ -371,7 +396,7 @@ authorityRouter.post('/authority/radar/bid/:issueId', userAuth, authorityAuth, a
         const populatedIssue = await Issue.findById(issue._id)
             .populate('reportedBy', 'name role')
             .populate('bidding.winningBid.authorityId', 'name');
-        
+
         const io = req.app.get('io');
 
         if (io) {
