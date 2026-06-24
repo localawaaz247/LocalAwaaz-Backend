@@ -2155,4 +2155,47 @@ adminRouter.patch('/admin/issue/:id/force-reject', userAuth, adminAuth, async (r
     }
 });
 
+// Delete a single inquiry
+adminRouter.delete('/admin/inquiry/:id', userAuth, adminAuth, async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            return res.status(400).json({ success: false, message: "Invalid Inquiry ID" });
+        }
+
+        const deletedInquiry = await Inquiry.findByIdAndDelete(id);
+
+        if (!deletedInquiry) {
+            return res.status(404).json({ success: false, message: "Inquiry not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Inquiry deleted successfully"
+        });
+
+    } catch (err) {
+        console.error('Server Error: Cannot delete inquiry', err);
+        return res.status(500).json({ success: false, message: "Server Error: Cannot delete inquiry" });
+    }
+});
+
+// Delete ALL inquiries at once (Nuke)
+adminRouter.delete('/admin/inquiries', userAuth, adminAuth, async (req, res) => {
+    try {
+        // Deletes every document in the Inquiry collection
+        await Inquiry.deleteMany({});
+
+        return res.status(200).json({
+            success: true,
+            message: "All inquiries have been permanently deleted"
+        });
+
+    } catch (err) {
+        console.error('Server Error: Cannot delete all inquiries', err);
+        return res.status(500).json({ success: false, message: "Server Error: Cannot delete all inquiries" });
+    }
+});
+
 module.exports = adminRouter
