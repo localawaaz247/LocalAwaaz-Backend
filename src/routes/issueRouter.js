@@ -484,15 +484,41 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
     try {
         const { userId } = req;
         const { id } = req.params;
+
         if (!mongoose.Types.ObjectId.isValid(id)) {
             return res.status(400).json({ success: false, message: "Invalid Issue ID format" });
         }
 
+        // 🟢 1. FETCH THE ISSUE FIRST TO CHECK LOGICAL CONFLICTS
+        const existingIssue = await Issue.findOne({ _id: id, isDeleted: false });
+
+        if (!existingIssue) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        // 🟢 2. PREVENT REPORTER FROM CONFIRMING THEIR OWN ISSUE
+        if (existingIssue.reportedBy.toString() === userId.toString()) {
+            return res.status(403).json({ success: false, message: "You cannot confirm an issue you reported." });
+        }
+
+        // 🟢 3. PREVENT FLAGGERS FROM CONFIRMING
+        const hasFlagged = existingIssue.flags.some(f => f.flaggedBy.toString() === userId.toString());
+        if (hasFlagged) {
+            return res.status(403).json({ success: false, message: "You cannot confirm an issue you have previously flagged." });
+        }
+
+        // 🟢 4. PREVENT DOUBLE CONFIRMATIONS (Handled gracefully)
+        const hasConfirmed = existingIssue.confirmations.some(c => c.user.toString() === userId.toString());
+        if (hasConfirmed) {
+            return res.status(400).json({ success: false, message: "You have already confirmed this issue." });
+        }
+
+        // 🟢 5. EXECUTE THE UPDATE
         const confirmedIssue = await Issue.findOneAndUpdate(
             {
                 _id: id,
                 "isDeleted": false,
-                "confirmations.user": { $ne: userId }
+                "confirmations.user": { $ne: userId } // Extra database-level safety net
             },
             {
                 $push: { confirmations: { user: userId } },
@@ -502,7 +528,7 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
         );
 
         if (confirmedIssue) {
-            // --- NEW: Recalculate and save impact score ---
+            // --- Recalculate and save impact score ---
             confirmedIssue.impactScore = calculateImpactScore(confirmedIssue);
             await confirmedIssue.save();
             // ----------------------------------------------
@@ -515,7 +541,7 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
                 }
             });
 
-            // 🚀 NEW: Check for Rank Up!
+            // 🚀 Check for Rank Up!
             await checkAndAssignRank(userId);
 
             triggerNotification({
@@ -543,14 +569,11 @@ issueRouter.post('/issue/:id/confirm', userAuth, statusAuth, profileAuth, locati
             });
         }
 
-        const issue = await Issue.exists({ _id: id, isDeleted: false });
-        if (!issue) {
-            return res.status(404).json({ success: false, message: "Issue not found" });
-        } else {
-            return res.status(400).json({ success: false, message: "You have already confirmed this Issue" });
-        }
+        // Fallback error (should rarely hit due to step 4)
+        return res.status(400).json({ success: false, message: "Could not confirm issue" });
+
     } catch (err) {
-        console.log(err);
+        console.error("Confirm Issue Error:", err);
         return res.status(500).json({ success: false, message: "Server Error : Can't confirm" });
     }
 });
@@ -711,12 +734,30 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
             return res.status(400).json({ success: false, message: "Invalid Flag reason" });
         }
 
-        // 🟢 NEW: Extract user rank to calculate dynamic flagging weight
+        // 🟢 1. FETCH THE ISSUE FIRST TO CHECK LOGICAL CONFLICTS
+        const existingIssue = await Issue.findOne({ _id: id, isDeleted: false });
+
+        if (!existingIssue) {
+            return res.status(404).json({ success: false, message: "Issue not found" });
+        }
+
+        // 🟢 2. PREVENT REPORTER FROM FLAGGING THEIR OWN ISSUE
+        if (existingIssue.reportedBy.toString() === userId.toString()) {
+            return res.status(403).json({ success: false, message: "You cannot flag an issue you reported." });
+        }
+
+        // 🟢 3. PREVENT CONFIRMERS FROM FLAGGING
+        const hasConfirmed = existingIssue.confirmations.some(c => c.user.toString() === userId.toString());
+        if (hasConfirmed) {
+            return res.status(403).json({ success: false, message: "You cannot flag an issue you have already confirmed." });
+        }
+
+        // Extract user rank to calculate dynamic flagging weight
         const user = await User.findById(userId).select('rank');
         let flagWeight = 1;
 
         if (user.rank === 'Legend' || user.rank === 'Civic Hero') {
-            flagWeight = 3; // Senior moderators scale heavily
+            flagWeight = 3;
         } else if (user.rank === 'Community Leader' || user.rank === 'Activist') {
             flagWeight = 2;
         }
@@ -729,24 +770,21 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
             },
             {
                 $push: { flags: { flagReason: flag, flaggedBy: userId } },
-                $inc: { flagCount: flagWeight } // 🟢 Multiplier applied directly to the field
+                $inc: { flagCount: flagWeight }
             },
             { new: true }
         );
 
         if (updatedIssue) {
-            // --- Recalculate and save impact score ---
             updatedIssue.impactScore = calculateImpactScore(updatedIssue);
             await updatedIssue.save();
 
-            // Give Points for Flagging
             await User.findByIdAndUpdate(userId, {
                 $inc: { civilScore: 2, issuesFlagged: 1 }
             });
 
             await checkAndAssignRank(userId);
 
-            // TRIGGER NOTIFICATION BLOCK
             try {
                 const io = req.app.get('io');
                 triggerNotification({
@@ -775,11 +813,6 @@ issueRouter.post('/issue/:id/:flag', userAuth, statusAuth, profileAuth, location
                 message: "Issue flagged successfully",
                 newFlagCount: updatedIssue.flagCount
             });
-        }
-
-        const issueExists = await Issue.exists({ _id: id, isDeleted: false });
-        if (!issueExists) {
-            return res.status(404).json({ success: false, message: "Issue not found" });
         }
 
         return res.status(400).json({ success: false, message: "You have already flagged this Issue" });
