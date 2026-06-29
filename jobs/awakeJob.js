@@ -2,7 +2,7 @@ const cron = require('node-cron');
 
 const startAwakeJob = () => {
     // Schedule to run every 14 minutes
-    cron.schedule('* * * * *', async () => {
+    cron.schedule('*/14 * * * *', async () => {
         try {
             // Target URL based on environment
             const targetUrl = process.env.NODE_ENV === 'production'
