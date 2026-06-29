@@ -1,7 +1,7 @@
 const cron = require('node-cron');
 const Issue = require('../src/models/Issue')
 const User = require('../src/models/User');
-const { triggerNotification } = require('../src/utils/notificationService');
+const triggerNotification = require('../src/utils/notificationService');
 
 /**
  * 🚀 THE MASTER STATE ENGINE
