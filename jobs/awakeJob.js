@@ -7,7 +7,7 @@ const startAwakeJob = () => {
             // Target URL based on environment
             const targetUrl = process.env.NODE_ENV === 'production'
                 ? 'https://localawaaz-backend.onrender.com/ping'
-                : `http://localhost:${process.env.PORT || 1111}/ping`;
+                : `http://localhost:${process.env.PORT || 1111}/ping`; 
 
             const response = await fetch(targetUrl);
 
