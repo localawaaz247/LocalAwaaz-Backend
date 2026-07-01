@@ -237,6 +237,7 @@ authRouter.get(
 
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
+            path: '/refresh_token',
             secure: process.env.NODE_ENV === "production",
             sameSite: process.env.NODE_ENV === "production" ? 'none' : 'lax',
             maxAge: EXPIRY_LIMIT
@@ -513,6 +514,7 @@ authRouter.post('/auth/google/native', async (req, res) => {
 
         res.cookie('refreshToken', refreshToken, {
             httpOnly: true,
+            path: '/refresh_token',
             secure: isProduction,
             sameSite: isProduction ? 'none' : 'lax',
             maxAge: EXPIRY_LIMIT
