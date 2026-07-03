@@ -175,7 +175,7 @@ userRouter.patch('/me/profile', userAuth, statusAuth, profileAuth, async (req, r
         const updates = {};
 
         if (userName) {
-            const cleanUserName = userName.trim().toLowerCase();
+            const cleanUserName = userName.trim().toLowerCase(); 
             // Optional: Add regex validation for valid username characters here
             const existingUser = await User.findOne({ userName: cleanUserName, _id: { $ne: userId } });
             if (existingUser) {
