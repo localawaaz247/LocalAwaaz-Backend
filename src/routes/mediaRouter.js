@@ -1,7 +1,5 @@
 const express = require('express');
-const multer = require('multer');
 const crypto = require("crypto");
-const fs = require('fs');
 const path = require('path');
 const {
     S3Client,
@@ -15,9 +13,9 @@ const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const userAuth = require('../middlewares/userAuth');
 const profileAuth = require('../middlewares/profileAuth');
-const TempMedia = require('../models/TempMedia');
 const statusAuth = require('../middlewares/statusAuth');
 const uploadAuth = require('../middlewares/uploadAuth');
+const TempMedia = require('../models/TempMedia');
 
 const mediaRouter = express.Router();
 
@@ -143,160 +141,66 @@ mediaRouter.post('/multipart/abort', userAuth, statusAuth, profileAuth, async (r
     }
 });
 
-
 // ============================================================================
-// AVATAR UPLOAD (Kept untouched because Multer is fine for small 1-off images)
+// PRE-SIGNED URL FOR DOCUMENTS (ID Proofs and single documents)
 // ============================================================================
 
-const uploadAvatar = multer({
-    dest: 'temp_uploads/',
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit for avatar
-    fileFilter: (req, file, cb) => {
-        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-        if (allowedMimes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error("FILE_TYPE_NOT_SUPPORTED"), false);
-        }
-    }
-});
-
-const uploadAvatarMiddleware = uploadAvatar.single('file');
-
-mediaRouter.post("/upload-avatar", userAuth, statusAuth, (req, res, next) => {
-    uploadAvatarMiddleware(req, res, (err) => {
-        if (err instanceof multer.MulterError) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ success: false, message: "Image exceeds the maximum allowed size." });
-            }
-            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
-        } else if (err) {
-            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
-                return res.status(400).json({ success: false, message: "Only image files (JPG, PNG, WEBP, GIF) are allowed." });
-            }
-            return res.status(500).json({ success: false, message: "An unexpected error occurred during upload." });
-        }
-        next();
-    });
-}, async (req, res) => {
+mediaRouter.get("/document/presign", uploadAuth, async (req, res) => {
     try {
-        const file = req.file;
-
-        if (!file) {
-            return res.status(400).json({ success: false, message: "No file uploaded." });
-        }
-
-        console.log(`🚀 Starting Direct Upload for Avatar...`);
-
-        const fileStream = fs.createReadStream(file.path);
-        const uniqueFileName = `avatar-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+        const { fileType = "application/pdf" } = req.query;
+        const uniqueKey = `documents/doc-${crypto.randomUUID()}`;
 
         const command = new PutObjectCommand({
             Bucket: process.env.R2_BUCKET_NAME,
-            Key: uniqueFileName,
-            Body: fileStream,
-            ContentType: file.mimetype,
+            Key: uniqueKey,
+            ContentType: fileType
         });
 
-        await s3.send(command);
+        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueKey}`;
 
-        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
-        console.log(`✅ Avatar Uploaded: ${uniqueFileName}`);
-
-        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-
-        return res.status(200).json({
-            success: true,
-            message: "Profile picture uploaded successfully.",
-            publicUrl: publicUrl
+        // 👇 LOG THIS FILE IN TEMP MEDIA BEFORE RESPONDING
+        await TempMedia.create({
+            r2Key: uniqueKey,
+            url: publicUrl
         });
 
+        return res.status(200).json({ success: true, uploadUrl, publicUrl });
     } catch (error) {
-        console.error("Avatar Upload Error:", error);
-        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-        return res.status(500).json({
-            success: false,
-            message: "A network issue occurred while saving your image."
-        });
+        console.error("Document Presign Error:", error);
+        return res.status(500).json({ success: false, message: "Failed to generate secure upload link." });
     }
 });
 
 // ============================================================================
-// STANDARD MEDIA UPLOAD (For ID Proofs and single documents)
+// PRE-SIGNED URL FOR AVATARS 
 // ============================================================================
 
-const uploadMedia = multer({
-    dest: 'temp_uploads/',
-    limits: { fileSize: 15 * 1024 * 1024 }, // 15MB limit for documents
-    fileFilter: (req, file, cb) => {
-        const allowedMimes = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/pdf'];
-        if (allowedMimes.includes(file.mimetype)) {
-            cb(null, true);
-        } else {
-            cb(new Error("FILE_TYPE_NOT_SUPPORTED"), false);
-        }
-    }
-});
-
-const uploadMediaMiddleware = uploadMedia.single('media'); // Matches formData.append('media', file)
-
-mediaRouter.post("/media/upload", uploadAuth, (req, res, next) => {
-    uploadMediaMiddleware(req, res, (err) => {
-        if (err instanceof multer.MulterError) {
-            if (err.code === 'LIMIT_FILE_SIZE') {
-                return res.status(400).json({ success: false, message: "File exceeds the maximum allowed size." });
-            }
-            return res.status(400).json({ success: false, message: `Upload error: ${err.message}` });
-        } else if (err) {
-            if (err.message === "FILE_TYPE_NOT_SUPPORTED") {
-                return res.status(400).json({ success: false, message: "Only images and PDFs are allowed." });
-            }
-            return res.status(500).json({ success: false, message: "Unexpected error during upload." });
-        }
-        next();
-    });
-}, async (req, res) => {
+mediaRouter.get("/avatar/presign", userAuth, statusAuth, async (req, res) => {
     try {
-        const file = req.file;
-
-        if (!file) {
-            return res.status(400).json({ success: false, message: "No file uploaded." });
-        }
-
-        console.log(`🚀 Starting Direct Upload for Document...`);
-
-        const fileStream = fs.createReadStream(file.path);
-        const uniqueFileName = `doc-${crypto.randomUUID()}-${file.originalname.replace(/\s+/g, '-')}`;
+        const { fileType = "image/jpeg" } = req.query;
+        const userId = req.userId;
+        const uniqueKey = `avatars/${userId}-${crypto.randomUUID()}`;
 
         const command = new PutObjectCommand({
             Bucket: process.env.R2_BUCKET_NAME,
-            Key: uniqueFileName,
-            Body: fileStream,
-            ContentType: file.mimetype,
+            Key: uniqueKey,
+            ContentType: fileType
         });
 
-        await s3.send(command);
+        const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueKey}`;
 
-        const publicUrl = `${process.env.R2_PUBLIC_URL}/${uniqueFileName}`;
-        console.log(`✅ Document Uploaded: ${uniqueFileName}`);
-
-        // Cleanup local temp file
-        if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
-
-        // Your frontend handleFileUpload expects res.data.urls or res.data.url
-        return res.status(200).json({
-            success: true,
-            url: publicUrl,
-            urls: [publicUrl]
+        // 👇 LOG THIS FILE IN TEMP MEDIA BEFORE RESPONDING
+        await TempMedia.create({
+            r2Key: uniqueKey,
+            url: publicUrl
         });
 
+        return res.status(200).json({ success: true, uploadUrl, publicUrl });
     } catch (error) {
-        console.error("Document Upload Error:", error);
-        if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
-        return res.status(500).json({
-            success: false,
-            message: "A network issue occurred while saving your document."
-        });
+        console.error("Avatar Presign Error:", error);
+        return res.status(500).json({ success: false, message: "Failed to generate secure upload link." });
     }
 });
 

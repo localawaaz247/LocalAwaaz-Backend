@@ -19,6 +19,7 @@ const generateUniqueUserName = require('../utils/generateUniqueUserName');
 const triggerNotification = require('../utils/notificationService');
 const validateAuthoritySignupData = require('../utils/validateAuthoritySignupData');
 const validateCitizenSignupData = require('../utils/validateCitizenSignupData');
+const TempMedia = require('../models/TempMedia');
 // Note: You will eventually need to add your Android/iOS Client IDs here too, 
 // but we can start with the web client ID for the backend verification.
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
@@ -602,6 +603,10 @@ authRouter.post('/auth/register-authority', async (req, res) => {
 
         // 7. Cleanup OTP
         await OtpModel.deleteOne({ email: lowerCaseEmail });
+
+        if (idProofUrl) {
+            await TempMedia.deleteOne({ url: idProofUrl });
+        }
 
         // ==========================================
         // 8. NOTIFY ALL ADMINS

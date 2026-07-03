@@ -12,6 +12,7 @@ const Notification = require('../models/Notification');
 const axios = require("axios");
 const stringSimilarity = require('string-similarity');
 const { State, City } = require('country-state-city');
+const TempMedia = require("../models/TempMedia");
 
 
 userRouter.get('/issues/feed', userAuth, statusAuth, profileAuth, async (req, res) => {
@@ -175,7 +176,7 @@ userRouter.patch('/me/profile', userAuth, statusAuth, profileAuth, async (req, r
         const updates = {};
 
         if (userName) {
-            const cleanUserName = userName.trim().toLowerCase(); 
+            const cleanUserName = userName.trim().toLowerCase();
             // Optional: Add regex validation for valid username characters here
             const existingUser = await User.findOne({ userName: cleanUserName, _id: { $ne: userId } });
             if (existingUser) {
@@ -268,6 +269,9 @@ userRouter.patch('/me/profile', userAuth, statusAuth, profileAuth, async (req, r
 
         if (!updatedUser) {
             return res.status(404).json({ success: false, message: "User not found" });
+        }
+        if (profilePic) {
+            await TempMedia.deleteOne({ url: profilePic });
         }
 
         return res.status(200).json({
